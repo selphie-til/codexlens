@@ -855,12 +855,13 @@ mod tests {
             .iter()
             .map(|s| (s.id.as_str(), s.startup_tokens, s.load_mode))
             .collect();
+        let imported_id = format!("@{}", Path::new("parts").join("b.md").display());
         assert_eq!(
             found,
             [
                 ("global", Some(6), LoadMode::StartupFull),
                 ("@parts/a.md", Some(102), LoadMode::StartupFull),
-                ("@parts/b.md", Some(10), LoadMode::StartupFull),
+                (imported_id.as_str(), Some(10), LoadMode::StartupFull),
             ]
         );
     }

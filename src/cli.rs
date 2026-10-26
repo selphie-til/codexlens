@@ -2998,28 +2998,23 @@ mod tests {
 
     #[test]
     fn store_path_defaults_under_the_user_state_dir() {
+        let root = std::env::temp_dir().join("codexlens-example");
         assert_eq!(
-            store_path(None, Some(Path::new("/tmp/example/state")), None).unwrap(),
-            PathBuf::from("/tmp/example/state/codexlens/codexlens.db")
+            store_path(None, Some(&root.join("state")), None).unwrap(),
+            root.join("state/codexlens/codexlens.db")
         );
         assert_eq!(
-            store_path(None, None, Some(Path::new("/tmp/example/home"))).unwrap(),
-            PathBuf::from("/tmp/example/home/.local/state/codexlens/codexlens.db")
+            store_path(None, None, Some(&root.join("home"))).unwrap(),
+            root.join("home/.local/state/codexlens/codexlens.db")
         );
     }
 
     #[test]
     fn store_path_ignores_a_relative_xdg_state_home() {
-        // XDG: a non-absolute XDG_STATE_HOME is invalid and must be ignored —
-        // honoring it would put the store back under the current directory.
+        let home = std::env::temp_dir().join("codexlens-example-home");
         assert_eq!(
-            store_path(
-                None,
-                Some(Path::new("relative/state")),
-                Some(Path::new("/tmp/example/home"))
-            )
-            .unwrap(),
-            PathBuf::from("/tmp/example/home/.local/state/codexlens/codexlens.db")
+            store_path(None, Some(Path::new("relative/state")), Some(&home)).unwrap(),
+            home.join(".local/state/codexlens/codexlens.db")
         );
     }
 
