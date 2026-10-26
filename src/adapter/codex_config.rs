@@ -85,12 +85,20 @@ pub fn read_global(codex_home: &Path, home: Option<&Path>) -> Vec<Surface> {
     dedup(out)
 }
 
-pub fn read_project_surfaces(root: &Path, project: &str, _home: Option<&Path>) -> Vec<Surface> {
+pub fn read_project_surfaces(root: &Path, project: &str, home: Option<&Path>) -> Vec<Surface> {
     let scope = Scope::Project(project.into());
     let mut out = Vec::new();
     // Codex loads instructions from the project root down to the session cwd.
-    // Stop at a Git boundary; never scan unrelated siblings or child trees.
+    // Home owns global configuration, even when it is itself a Git checkout.
+    // Compare resolved paths so a symlinked home cannot evade the boundary.
+    let home = home.map(|path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()));
+    // Stop before home, or after including the nearest Git root.
     for dir in root.ancestors() {
+        if let Some(home) = &home
+            && std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()) == *home
+        {
+            break;
+        }
         out.extend(instructions(dir, &scope));
         out.extend(read_skill_surfaces(&dir.join(".agents/skills"), &scope));
         out.extend(config(&dir.join(".codex"), &scope));
@@ -124,6 +132,126 @@ pub fn codex_config_dir(config: Option<&Path>, home: Option<&Path>) -> Option<st
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct Fixture(std::path::PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "codexlens-config-example-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+        fn write(&self, relative: &str, text: &str) {
+            let path = self.0.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn project_scan_stops_before_home_and_preserves_project_ancestors() {
+        let f = Fixture::new();
+        f.write(
+            "home/.agents/skills/global-example/SKILL.md",
+            "Global skill",
+        );
+        f.write(
+            "home/.codex/config.toml",
+            "[mcp_servers.global-example]\ncommand = 'example'\n",
+        );
+        f.write("home/.git/HEAD", "ref: refs/heads/main\n");
+        f.write("home/projects/AGENTS.md", "Shared project guidance");
+        f.write(
+            "home/projects/example/.agents/skills/local-example/SKILL.md",
+            "Local skill",
+        );
+        f.write("home/projects/example/nested/AGENTS.md", "Nested guidance");
+        let home = f.0.join("home");
+        let global = read_global(&home.join(".codex"), Some(&home));
+        assert!(global.iter().any(|s| s.id == "global-example"));
+        let project = read_project_surfaces(
+            &home.join("projects/example/nested"),
+            "example",
+            Some(&home),
+        );
+        assert!(
+            !project.iter().any(|s| s.id == "global-example"),
+            "global catalog leaked into project: {project:?}"
+        );
+        assert!(project.iter().any(|s| s.id == "local-example"));
+        assert_eq!(project.iter().filter(|s| s.kind == "agents_md").count(), 2);
+    }
+
+    #[test]
+    fn a_session_started_in_home_does_not_reclassify_global_config() {
+        let f = Fixture::new();
+        f.write(
+            "home/.agents/skills/global-example/SKILL.md",
+            "Global skill",
+        );
+        let home = f.0.join("home");
+        assert!(read_project_surfaces(&home, "example", Some(&home)).is_empty());
+    }
+
+    #[test]
+    fn real_project_overrides_remain_inside_the_git_boundary() {
+        let f = Fixture::new();
+        f.write("home/.agents/skills/review/SKILL.md", "Global review");
+        f.write(
+            "home/work/.agents/skills/outside-example/SKILL.md",
+            "Outside project",
+        );
+        f.write("home/work/project/.git", "gitdir: /tmp/example/gitdir");
+        f.write(
+            "home/work/project/.agents/skills/review/SKILL.md",
+            "Project review",
+        );
+        f.write("home/work/project/nested/AGENTS.md", "Nested guidance");
+        let project = read_project_surfaces(
+            &f.0.join("home/work/project/nested"),
+            "example",
+            Some(&f.0.join("home")),
+        );
+        let reviews: Vec<_> = project
+            .iter()
+            .filter(|s| s.kind == "skill" && s.id == "review")
+            .collect();
+        assert_eq!(reviews.len(), 1);
+        assert!(Path::new(&reviews[0].config_path).starts_with(f.0.join("home/work/project")));
+        assert!(!project.iter().any(|s| s.id == "outside-example"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_home_is_still_a_global_boundary() {
+        let f = Fixture::new();
+        f.write(
+            "home/.agents/skills/global-example/SKILL.md",
+            "Global skill",
+        );
+        f.write("home/project/AGENTS.md", "Project guidance");
+        std::os::unix::fs::symlink(f.0.join("home"), f.0.join("home-alias")).unwrap();
+        // The session and HOME may use different aliases for the same directory.
+        for (root, home) in [
+            (f.0.join("home-alias/project"), f.0.join("home")),
+            (f.0.join("home/project"), f.0.join("home-alias")),
+        ] {
+            let project = read_project_surfaces(&root, "example", Some(&home));
+            assert_eq!(project.len(), 1);
+            assert_eq!(project[0].kind, "agents_md");
+        }
+    }
+
     #[test]
     fn catalogs_toml_servers_and_agents_without_secret_values() {
         let surfaces = parse_config(

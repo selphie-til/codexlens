@@ -12,9 +12,17 @@ helpers. Static token estimates use four characters per token.
 
 In each instruction directory AGENTS.override.md replaces AGENTS.md. Global
 instructions come from CODEX_HOME. Project scanning follows ancestors from the
-recorded cwd up to the nearest Git boundary. Each directory contributes
-instructions, .agents/skills, and .codex/config.toml. Custom fallback names,
-truncation, plugin caches and dynamic schemas are not modeled.
+recorded cwd up to and including the nearest Git boundary, but stops **before
+HOME** if reached first. HOME is a global ownership boundary, even when the
+session starts there or HOME itself contains a Git marker. Resolved paths are
+compared so symlink aliases do not reclassify global configuration as project
+configuration. Without a known home, only the Git boundary applies.
+Each included directory contributes instructions, .agents/skills, and
+.codex/config.toml. Genuine project declarations still shadow global namesakes;
+global files must not create that shadow merely by appearing in the ancestor
+chain. The catalog is rebuilt on every analysis, including when rollouts are
+unchanged, so existing duplicate rows disappear on the next refresh. Custom
+fallback names, truncation, plugin caches and dynamic schemas are not modeled.
 
 TOML mcp_servers tables become server surfaces (explicitly disabled declarations
 are skipped); agents tables become agent surfaces. MCP schema sizes are unknown,

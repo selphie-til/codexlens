@@ -139,3 +139,86 @@ fn codex_cli_ingests_archives_and_refreshes_without_double_counting() {
         20
     );
 }
+
+#[test]
+fn a_global_skill_used_in_a_non_git_project_keeps_its_global_usage() {
+    let f = Fixture::new();
+    f.write(
+        ".agents/skills/review/SKILL.md",
+        "---\nname: review\ndescription: Example review\n---\nReview code.\n",
+    );
+    f.write("project/AGENTS.md", "Example project guidance");
+    f.write(
+        "project/.agents/skills/local-example/SKILL.md",
+        "---\nname: local-example\ndescription: Example local skill\n---\nLocal guidance.\n",
+    );
+    f.write(
+        "config/sessions/example.jsonl",
+        &rollout(&f.0.join("project")),
+    );
+    let inventory = f.json(&["inventory", "--format", "json"]);
+    let reviews: Vec<_> = inventory["surfaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["kind"] == "skill" && s["id"] == "review")
+        .collect();
+    assert_eq!(
+        reviews.len(),
+        1,
+        "global skills must not be reinstalled as project skills: {reviews:?}"
+    );
+    assert_eq!(reviews[0]["scope"], "global");
+    assert_eq!(reviews[0]["uses"], 1);
+    assert_ne!(reviews[0]["status"], "unused");
+    assert!(
+        inventory["surfaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["id"] == "local-example" && s["scope"] == "project")
+    );
+}
+
+#[test]
+fn refresh_repairs_existing_global_shadow_rows_without_reingesting_sessions() {
+    let f = Fixture::new();
+    f.write(
+        ".agents/skills/review/SKILL.md",
+        "---\nname: review\ndescription: Example review\n---\nReview code.\n",
+    );
+    f.write("project/AGENTS.md", "Example project guidance");
+    f.write(
+        "config/sessions/example.jsonl",
+        &rollout(&f.0.join("project")),
+    );
+    f.json(&["analyze", "--format", "json"]);
+    // Reproduce an older catalog's accidental project copy without touching
+    // transcript events or fingerprints, which must remain valid.
+    {
+        let conn = rusqlite::Connection::open(f.0.join("store.db")).unwrap();
+        conn.execute("INSERT INTO surfaces SELECT kind, id, 'project', ?1, config_path, static_tokens, startup_tokens, load_mode FROM surfaces WHERE kind='skill' AND id='review' AND scope='global'", [f.0.join("project").to_str().unwrap()]).unwrap();
+    }
+    let stale = f.json(&[
+        "inventory",
+        "--scope",
+        "global",
+        "--frozen",
+        "--format",
+        "json",
+    ]);
+    assert_eq!(stale["surfaces"][0]["status"], "unused");
+    let refreshed = f.json(&["analyze", "--format", "json"]);
+    assert_eq!(refreshed["sessions"], 0);
+    assert_eq!(refreshed["unchanged"], 1);
+    let inventory = f.json(&[
+        "inventory",
+        "--scope",
+        "global",
+        "--frozen",
+        "--format",
+        "json",
+    ]);
+    assert_eq!(inventory["surfaces"][0]["uses"], 1);
+    assert_ne!(inventory["surfaces"][0]["status"], "unused");
+}
