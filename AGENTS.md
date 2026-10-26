@@ -69,6 +69,9 @@ paths with `rg --files` before searching guessed filenames or directories.
 
 | Concern | File |
 | --- | --- |
+| Core module declarations | `src/core.rs` |
+| Normalized records and execution spans | `src/core/span.rs` |
+| Usage events and attribution | `src/core/usage.rs` |
 | Configuration surfaces and startup costs | `src/core/surface.rs` |
 | Optimization findings and Markdown briefing | `src/core/optimize.rs` |
 | CLI commands and reporting | `src/cli.rs` |
