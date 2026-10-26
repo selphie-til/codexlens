@@ -28,7 +28,14 @@ rollout directory) without following directory symlinks.
   produce skill-load signals. These are evidence of loading, not compliance.
 - Function/custom tool outputs join calls by `call_id`. Explicit error flags,
   nonzero shell exit markers and structured exit codes identify failures.
-  Text heuristics classify failures after detection.
+  Text heuristics classify the full output after detection. Stored excerpts are
+  at most 200 Unicode scalar values, independent of output length. Terminal color
+  sequences are removed before selecting lines. Excerpts prioritize
+  a failed-test name, diagnostic text and source location, then a failure summary
+  when a slot is available. Up to three evidence lines share the space, joined by
+  ` | `; oversized lines retain both ends with an ellipsis so trailing locations
+  survive. With no recognized evidence line, a whitespace-collapsed prefix is
+  retained. Build/log prefixes do not displace recognized diagnostic evidence.
 - Shell calls record command heads; `apply_patch` file headers record edits.
 
 Child rollouts are ingested independently. Costs are not attributed to parent

@@ -24,7 +24,7 @@ const ANALYZER_META_KEY: &str = "analyzer_version";
 /// only way rows behind the incremental-ingest skip get rebuilt. It is not the
 /// crate version: a release that changes no analysis should not force everyone
 /// through a full re-analyze.
-const ANALYZER_VERSION: &str = "codex-1";
+const ANALYZER_VERSION: &str = "codex-2";
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS token_totals (
@@ -928,6 +928,16 @@ impl Store {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         Ok(row)
+    }
+
+    /// Spawn attempts observed in transcript events, independent of run/cost
+    /// attribution. A call need not have completed successfully.
+    pub fn observed_spawn_calls(&self) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM events WHERE kind = 'agent_spawn'",
+            [],
+            |row| row.get(0),
+        )?)
     }
 
     /// Total subagent output tokens and subagent count across all sessions.

@@ -55,7 +55,14 @@ Two kinds carry caveats that downstream reports must honour:
   so a pointer defers the cost; an error excerpt is small and its *value is the
   concrete instance* (the actual failing path), which a report shows directly.
   It lives only in the local store (gitignored, never committed), so the privacy
-  rule — no real data in the repo — still holds.
+  rule — no real data in the repo — still holds. Its fallback text classifier
+  orders signatures by how directly they explain the outcome. Structural-style
+  cancellation and hook-block messages remain authoritative, while an explicit
+  Rust runner summary (`test result: FAILED`) outranks generic diagnostics such
+  as `No such file` embedded in an individual failed test. Without that exact
+  summary (or another specific failure signature), a real missing-path error
+  remains `path-not-found`. This avoids recommending a file map for a failed
+  test run without treating every occurrence of the word “failed” as a test.
 
 - **`file_edit`** stores the basename *and* the full path because the two answer
   different questions. A hotspot ranking wants the basename — it is the name a

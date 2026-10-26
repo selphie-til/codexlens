@@ -225,3 +225,97 @@ fn refresh_repairs_existing_global_shadow_rows_without_reingesting_sessions() {
     assert_eq!(inventory["surfaces"][0]["uses"], 1);
     assert_ne!(inventory["surfaces"][0]["status"], "unused");
 }
+
+#[test]
+fn two_observed_spawn_calls_are_not_reported_as_zero_agents() {
+    let f = Fixture::new();
+    f.write("project/AGENTS.md", "Example guidance");
+    let mut text = rollout(&f.0.join("project"));
+    for id in ["example-spawn-a", "example-spawn-b"] {
+        text.push('\n');
+        text.push_str(&serde_json::json!({"timestamp":"2026-01-01T00:00:02Z", "type":"response_item", "payload":{
+            "type":"function_call", "name":"spawn_agent", "call_id":id, "arguments":"{\"agent_type\":\"example\"}"}}).to_string());
+    }
+    f.write("config/sessions/example.jsonl", &text);
+    let analyzed = f.json(&["analyze", "--format", "json"]);
+    assert_eq!(analyzed["observed_spawn_calls"], 2);
+    assert_eq!(analyzed["subagent_cost_measured"], false);
+    let rows = f.json(&[
+        "sql",
+        "SELECT COUNT(*) AS n FROM events WHERE kind='agent_spawn'",
+        "--format",
+        "json",
+    ]);
+    assert_eq!(rows[0]["n"], 2);
+    for args in [
+        vec!["optimize", "--print", "--frozen"],
+        vec!["doctor", "--frozen"],
+        vec!["usage", "--frozen"],
+        vec!["analyze"],
+    ] {
+        let output = f.run(&args);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let text = String::from_utf8(output.stdout).unwrap();
+        assert!(text.contains("not measured"), "{text}");
+        assert!(text.contains("2 observed spawn calls"), "{text}");
+        assert!(
+            !text.contains("0 agents") && !text.contains("0 subagent runs"),
+            "{text}"
+        );
+    }
+    let doctor = f.json(&["doctor", "--frozen", "--format", "json"]);
+    assert_eq!(doctor["global"]["subagent_cost_measured"], false);
+    assert_eq!(doctor["global"]["observed_spawn_calls"], 2);
+}
+
+#[test]
+fn analyzer_upgrade_reextracts_diagnostics_from_unchanged_rollouts() {
+    let f = Fixture::new();
+    f.write("project/AGENTS.md", "Example guidance");
+    let output = format!(
+        "{}\n---- checks::loads_example stdout ----\nthread 'checks::loads_example' panicked at src/check.rs:42:7:\nassertion failed: No such file or directory\ntest result: FAILED. 0 passed; 1 failed",
+        "Compiling example\n".repeat(40)
+    );
+    let text = [
+        serde_json::json!({"timestamp":"2026-01-01T00:00:00Z", "type":"session_meta", "payload":{"id":"example-session", "cwd":f.0.join("project")}}),
+        serde_json::json!({"timestamp":"2026-01-01T00:00:01Z", "type":"event_msg", "payload":{"type":"item_completed", "item":{"type":"CommandExecution", "command":"cargo test", "exit_code":101, "aggregated_output":output}}}),
+    ].iter().map(ToString::to_string).collect::<Vec<_>>().join("\n");
+    f.write("config/sessions/example.jsonl", &text);
+    f.json(&["analyze", "--format", "json"]);
+    {
+        let conn = rusqlite::Connection::open(f.0.join("store.db")).unwrap();
+        conn.execute(
+            "UPDATE meta SET value='codex-1' WHERE key='analyzer_version'",
+            [],
+        )
+        .unwrap();
+        conn.execute("UPDATE events SET surface_id='path-not-found', source='Compiling example' WHERE kind='tool_error'", []).unwrap();
+    }
+    let refreshed = f.json(&["analyze", "--format", "json"]);
+    assert_eq!(refreshed["sessions"], 1);
+    assert_eq!(refreshed["unchanged"], 0);
+    let rows = f.json(&[
+        "sql",
+        "SELECT category, excerpt FROM tool_errors",
+        "--format",
+        "json",
+    ]);
+    assert_eq!(rows[0]["category"], "test-failure");
+    let excerpt = rows[0]["excerpt"].as_str().unwrap();
+    assert!(excerpt.contains("checks::loads_example"), "{excerpt}");
+    assert!(excerpt.contains("assertion failed"), "{excerpt}");
+    assert!(excerpt.contains("src/check.rs:42:7"), "{excerpt}");
+    assert!(excerpt.chars().count() <= 200);
+    let version = f.json(&[
+        "sql",
+        "SELECT value FROM meta WHERE key='analyzer_version'",
+        "--format",
+        "json",
+    ]);
+    assert_eq!(version[0]["value"], "codex-2");
+    assert_eq!(f.json(&["analyze", "--format", "json"])["unchanged"], 1);
+}

@@ -76,7 +76,8 @@ marketplace.
   load or human turn. `usage --by` buckets **skill spans**, not all session tokens.
 - Child rollouts are analyzed independently. Spawn counts are observable, but
   parent/child token attribution is not implemented; subagent split fields are
-  unavailable (legacy report fields currently remain zero).
+  unavailable. Human reports say `not measured` and show observed spawn calls
+  separately; JSON retains legacy zeros with explicit measurement coverage.
 - Shell command failures, function/custom-tool outputs, MCP calls, patch file
   edits, prompt classes and startup context estimates are supported. Shell
   scripts wrapping multiple calls and unsupported tool output shapes may reduce

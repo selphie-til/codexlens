@@ -174,11 +174,15 @@ pub fn classify_error(text: &str) -> ErrorCategory {
         ErrorCategory::McpError
     } else if has("command not found") || has("is not recognized") {
         ErrorCategory::CommandNotFound
+    } else if has("test result: failed") {
+        // An explicit runner summary describes the overall command outcome;
+        // individual failures can contain generic missing-path diagnostics.
+        ErrorCategory::TestFailure
     } else if has("no such file") || has("does not exist") || has("cannot find the path") {
         ErrorCategory::PathNotFound
     } else if has("error[e") || has("mismatched types") || has("cannot borrow") {
         ErrorCategory::CompileError
-    } else if has("test result: failed") || has("assertion `left") || has("panicked at") {
+    } else if has("assertion `left") || has("panicked at") {
         ErrorCategory::TestFailure
     } else if has("timed out") || has("timeout") {
         ErrorCategory::Timeout
@@ -230,6 +234,10 @@ mod tests {
             classify_error("[enforce-perl.sh]: sed/awk detected - Use perl instead"),
             ErrorCategory::BlockedByHook
         );
+        assert_eq!(
+            classify_error("Blocked: test execution is prohibited\ntest result: FAILED"),
+            ErrorCategory::BlockedByHook
+        );
     }
 
     #[test]
@@ -265,6 +273,25 @@ mod tests {
     }
 
     #[test]
+    fn explicit_failed_test_summary_beats_embedded_missing_path() {
+        assert_eq!(
+            classify_error(
+                "test tests::loads_fixture ... FAILED: No such file or directory\n\
+                 test result: FAILED. 0 passed; 1 failed; 0 ignored"
+            ),
+            ErrorCategory::TestFailure
+        );
+    }
+
+    #[test]
+    fn missing_path_without_failed_test_summary_stays_path_not_found() {
+        assert_eq!(
+            classify_error("cat: fixtures/absent.json: No such file or directory"),
+            ErrorCategory::PathNotFound
+        );
+    }
+
+    #[test]
     fn user_stops_and_cascades_are_cancelled_not_failures() {
         assert_eq!(
             classify_error("<tool_use_error>Cancelled: parallel tool call Bash(grep ...)"),
@@ -272,6 +299,12 @@ mod tests {
         );
         assert_eq!(
             classify_error("The user doesn't want to proceed with this tool use."),
+            ErrorCategory::Cancelled
+        );
+        assert_eq!(
+            classify_error(
+                "Cancelled: parallel tool call after sibling failure\ntest result: FAILED"
+            ),
             ErrorCategory::Cancelled
         );
     }

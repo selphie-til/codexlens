@@ -18,6 +18,11 @@ pub struct Findings {
     pub main_out: i64,
     pub sub_tokens: i64,
     pub sub_agents: i64,
+    /// Run/cost totals are unavailable in the Codex adapter; zero legacy fields
+    /// must not be presented as observations of no usage.
+    pub subagent_cost_measured: bool,
+    /// Observable spawn calls, independent of completed child runs or cost.
+    pub observed_spawn_calls: i64,
     /// The subagent total broken out per agent type, costliest first — which
     /// agent configurations that total actually paid for.
     pub agents: Vec<AgentCost>,
@@ -207,6 +212,19 @@ Deliver a concrete, prioritized action plan with the specific edits you propose,
 the investigation yourself. Apply file changes only after the user approves the plan — that \
 approval is the one and only thing you pause for, never direction on what to investigate.";
 
+/// Measurement coverage and observed activity are separate facts. In particular,
+/// a spawn count does not establish completed runs or their output token cost.
+pub fn subagent_summary(f: &Findings) -> String {
+    if f.subagent_cost_measured {
+        format!("{} ({} agents)", f.sub_tokens, f.sub_agents)
+    } else {
+        format!(
+            "not measured; {} observed spawn calls (child run totals and costs unavailable)",
+            f.observed_spawn_calls
+        )
+    }
+}
+
 /// Render the findings as a complete Markdown briefing, restricted to the
 /// requested scope: the global picture, each project's own findings, or both
 /// (the default). Any section with no data is omitted so the prompt never
@@ -217,25 +235,24 @@ pub fn render_briefing(f: &Findings, filter: &ScopeFilter) -> String {
     if filter.includes_global() {
         out.push_str("\n## Where tokens go\n");
         out.push_str(&format!("- Main-thread skill output: {}\n", f.main_out));
-        out.push_str(&format!(
-            "- Subagents: {} ({} agents)\n",
-            f.sub_tokens, f.sub_agents
-        ));
-        // Rows that fall short of the total are labeled before they are listed:
-        // read as the whole breakdown, they would pin the entire subagent bill
-        // on whichever types happened to be extracted.
-        if let Some(note) = f.agent_split.partial_note() {
-            out.push_str(&format!("  - {note}\n"));
-        }
-        // Which agent types that total paid for — the split two agents with
-        // similar spawn counts and very different output can only show here.
-        for agent in &f.agents {
-            out.push_str(&format!(
-                "  - {}: {} over {} run(s)\n",
-                agent.label(),
-                agent.out_tokens,
-                agent.runs
-            ));
+        out.push_str(&format!("- Subagents: {}\n", subagent_summary(f)));
+        if f.subagent_cost_measured {
+            // Rows that fall short of the total are labeled before they are listed:
+            // read as the whole breakdown, they would pin the entire subagent bill
+            // on whichever types happened to be extracted.
+            if let Some(note) = f.agent_split.partial_note() {
+                out.push_str(&format!("  - {note}\n"));
+            }
+            // Which agent types that total paid for — the split two agents with
+            // similar spawn counts and very different output can only show here.
+            for agent in &f.agents {
+                out.push_str(&format!(
+                    "  - {}: {} over {} run(s)\n",
+                    agent.label(),
+                    agent.out_tokens,
+                    agent.runs
+                ));
+            }
         }
 
         if f.floor > 0 {
@@ -483,6 +500,8 @@ mod tests {
             main_out: 8_000_000,
             sub_tokens: 1_800_000,
             sub_agents: 300,
+            subagent_cost_measured: true,
+            observed_spawn_calls: 300,
             agents: vec![
                 AgentCost {
                     agent: Some("general-purpose".to_string()),
@@ -563,6 +582,33 @@ mod tests {
                 always_on_heavy: vec![],
             }],
         }
+    }
+
+    #[test]
+    fn measured_zero_usage_is_distinct_from_missing_measurements() {
+        let f = Findings {
+            subagent_cost_measured: true,
+            ..Default::default()
+        };
+        assert!(render_briefing(&f, &ScopeFilter::All).contains("Subagents: 0 (0 agents)"));
+    }
+
+    #[test]
+    fn unmeasured_costs_show_observed_spawns_without_legacy_agent_rows() {
+        let mut f = findings();
+        f.subagent_cost_measured = false;
+        f.observed_spawn_calls = 2;
+        let brief = render_briefing(&f, &ScopeFilter::All);
+        assert!(brief.contains("Subagents: not measured; 2 observed spawn calls"));
+        assert!(!brief.contains("general-purpose:"));
+        assert!(!brief.contains("300 agents"));
+    }
+
+    #[test]
+    fn unmeasured_subagents_are_not_reported_as_zero_usage() {
+        let brief = render_briefing(&Findings::default(), &ScopeFilter::All);
+        assert!(brief.contains("Subagents: not measured"), "{brief}");
+        assert!(!brief.contains("0 agents"), "{brief}");
     }
 
     #[test]

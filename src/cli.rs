@@ -631,6 +631,8 @@ fn collect_findings(store: &Store) -> Result<optimize_mod::Findings> {
         main_out: store.skill_usage()?.iter().map(|r| r.out_tokens).sum(),
         sub_tokens,
         sub_agents,
+        subagent_cost_measured: false,
+        observed_spawn_calls: store.observed_spawn_calls()?,
         agent_split: SplitCoverage::new(
             sub_tokens,
             sub_agents,
@@ -777,7 +779,7 @@ fn doctor(filter: &ScopeFilter, format: Format, frozen: bool, db: &Path) -> Resu
             "global": global,
             "projects": projects,
             "session_tokens": store.token_totals()?,
-            "coverage": {"skill_usage": "observed-loads", "subagent_cost_attribution": false},
+            "coverage": {"skill_usage": "observed-loads", "subagent_cost_attribution": false, "observed_spawn_calls": store.observed_spawn_calls()?},
         }));
     }
 
@@ -954,10 +956,9 @@ fn doctor(filter: &ScopeFilter, format: Format, frozen: bool, db: &Path) -> Resu
             );
         }
         println!(
-            "  Output written so far: {} tokens by skills on the main thread, {} by {} subagent runs.",
+            "  Output written so far: {} tokens by skills on the main thread; subagents: {}.",
             fmt_tokens(f.main_out),
-            fmt_tokens(f.sub_tokens),
-            f.sub_agents
+            optimize_mod::subagent_summary(&f)
         );
         warn_missing_agent_split(&f.agent_split);
         for line in doctor_agent_lines(&f, &style.command("codexlens usage")) {
@@ -1086,6 +1087,9 @@ fn plural(n: usize, noun: &str) -> String {
 /// reported on stderr with its refresh hint.
 fn doctor_agent_lines(f: &optimize_mod::Findings, full_split: &str) -> Vec<String> {
     let mut lines = Vec::new();
+    if !f.subagent_cost_measured {
+        return lines;
+    }
     let top: Vec<String> = f
         .agents
         .iter()
@@ -1604,6 +1608,8 @@ fn analyze(projects: Option<PathBuf>, format: Format, db: &Path) -> Result<()> {
             "surfaces": stats.surface_count,
             "subagent_tokens": sub_tokens,
             "subagents": sub_agents,
+            "subagent_cost_measured": false,
+            "observed_spawn_calls": store.observed_spawn_calls()?,
             "permission_denials": stats.denials,
             "db": db.display().to_string(),
         }));
@@ -1611,12 +1617,13 @@ fn analyze(projects: Option<PathBuf>, format: Format, db: &Path) -> Result<()> {
     println!(
         "analyzed {} session(s) ({} unchanged), {} skill invocation(s), \
          {} surface(s) catalogued, \
-         {sub_tokens} subagent tokens across {sub_agents} subagent(s), \
+         subagent runs/costs not measured ({} observed spawn calls), \
          {} permission denial(s) -> {}",
         stats.sessions,
         stats.skipped,
         stats.spans_total,
         stats.surface_count,
+        store.observed_spawn_calls()?,
         stats.denials,
         db.display()
     );
@@ -1934,7 +1941,7 @@ fn usage(by: Option<&str>, format: Format, frozen: bool, db: &Path) -> Result<()
                 "sub_tokens": sub_tokens,
                 "sub_agents": sub_agents,
             },
-            "coverage": {"skill_usage": "observed-loads", "subagent_cost_attribution": false},
+            "coverage": {"skill_usage": "observed-loads", "subagent_cost_attribution": false, "observed_spawn_calls": store.observed_spawn_calls()?},
             "agent_split": agent_split,
             "agents": agents,
             "skills": skills,
@@ -1947,21 +1954,20 @@ fn usage(by: Option<&str>, format: Format, frozen: bool, db: &Path) -> Result<()
         "tokens: input {}, cached input {}, output {}, reasoning output {} (included in output)",
         totals.input, totals.cached_input, totals.output, totals.reasoning_output
     );
-    println!("coverage: skill reads are load signals; subagent cost attribution is unavailable");
+    println!(
+        "coverage: skill reads are load signals; subagents: not measured; {} observed spawn calls (child run totals and costs unavailable)",
+        store.observed_spawn_calls()?
+    );
     if skills.is_empty() && agents.is_empty() && sub_tokens == 0 {
         println!("no observable skill loads found");
         return Ok(());
     }
     preamble(
         format,
-        "What ran and what it cost. First the subagent bill per agent type\n\
-         (costliest first), then how often each skill ran — output tokens written,\n\
-         context growth while it ran, and wall-clock seconds (most-invoked first).\n\
-         A section with nothing to show is omitted.",
+        "Observed skill loads — output tokens written, context growth while each ran,\n\
+         and wall-clock seconds (most-invoked first). Child run costs are not measured.",
     );
-    println!(
-        "tokens: main-thread skill output {main_out}, subagents {sub_tokens} ({sub_agents} agents)"
-    );
+    println!("tokens: main-thread skill output {main_out}; subagent runs and costs not measured");
     // Stated between the total and the table, so the table below is read as
     // the part it is.
     if let Some(note) = agent_split.partial_note() {
@@ -2738,6 +2744,7 @@ mod tests {
         optimize_mod::Findings {
             sub_tokens,
             sub_agents,
+            subagent_cost_measured: true,
             agent_split: SplitCoverage::new(
                 sub_tokens,
                 sub_agents,

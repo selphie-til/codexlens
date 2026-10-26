@@ -15,7 +15,14 @@ output counters, alongside inherited skill-span reports. Cached/reasoning counts
 are subsets, not extra billable totals. `usage --by` groups skill spans by JST
 buckets, not the session-wide counters. Skill loads and costs are observational
 signals. Parent-child token attribution is unavailable; legacy split fields are
-zero and consumers must preserve that limitation.
+zero and consumers must preserve that limitation. Human analyze/doctor/usage
+reports and the optimizer briefing explicitly say `not measured` for child run
+counts and cost, even when legacy fields contain zero. `observed_spawn_calls`
+is counted separately from `agent_spawn` events: it describes attempted calls,
+not completed runs. The findings carry `subagent_cost_measured`; false suppresses
+numeric run/cost claims and agent breakdown rows in the briefing. JSON keeps
+legacy numeric fields for compatibility alongside the explicit coverage flag
+and observed count. A measured zero is valid only when measurement is supported.
 
 `sql` opens the store read-only and accepts a query argument or stdin.
 `optimize --print` prints the findings prompt. Otherwise optimize starts an

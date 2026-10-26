@@ -302,6 +302,94 @@ fn failed(p: &Value, text: &str) -> bool {
         || text.starts_with("error:")
 }
 
+fn without_terminal_colors(text: &str) -> String {
+    let mut plain = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for code in chars.by_ref() {
+                if ('@'..='~').contains(&code) {
+                    break;
+                }
+            }
+        } else {
+            plain.push(ch);
+        }
+    }
+    plain
+}
+
+/// Keep actionable evidence rather than build/log prefixes. Reserve space for
+/// each kind of evidence so a long diagnostic cannot hide the failing path.
+fn diagnostic_excerpt(text: &str) -> String {
+    const LIMIT: usize = 200;
+    let plain = without_terminal_colors(text);
+    let text = plain.as_str();
+    let mut selected: [Option<String>; 4] = Default::default();
+    for line in text.lines() {
+        let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        let lower = line.to_lowercase();
+        let rank = if (lower.starts_with("---- ") && lower.ends_with(" stdout ----"))
+            || (lower.starts_with("test ") && lower.contains(" ... failed"))
+            || lower.starts_with("failed ")
+        {
+            Some(0)
+        } else if lower.starts_with("assertion")
+            || lower.starts_with("error")
+            || lower.starts_with("caused by:")
+            || lower.starts_with("exception:")
+            || lower.contains("no such file")
+            || lower.contains("permission denied")
+        {
+            Some(1)
+        } else if lower.contains("panicked at")
+            || lower.starts_with("-->")
+            || lower.starts_with("file \"")
+            || lower.contains(".rs:")
+        {
+            Some(2)
+        } else if lower.starts_with("test result: failed") {
+            Some(3)
+        } else {
+            None
+        };
+        if let Some(rank) = rank
+            && selected[rank].is_none()
+        {
+            selected[rank] = Some(line);
+        }
+    }
+    let selected: Vec<String> = selected.into_iter().flatten().take(3).collect();
+    if selected.is_empty() {
+        return text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(LIMIT)
+            .collect();
+    }
+    let per_line = (LIMIT - 3 * (selected.len() - 1)) / selected.len();
+    selected
+        .iter()
+        .map(|line| {
+            let chars: Vec<char> = line.chars().collect();
+            if chars.len() <= per_line {
+                return line.clone();
+            }
+            let head = (per_line - 1) / 2;
+            let tail = per_line - head - 1;
+            chars[..head]
+                .iter()
+                .chain(std::iter::once(&'…'))
+                .chain(chars[chars.len() - tail..].iter())
+                .collect()
+        })
+        .collect::<Vec<String>>()
+        .join(" | ")
+}
+
 pub fn extract_tool_errors(text: &str) -> Vec<ToolError> {
     let mut calls = HashMap::new();
     let mut errors = Vec::new();
@@ -332,13 +420,7 @@ pub fn extract_tool_errors(text: &str) -> Vec<ToolError> {
                     errors.push(ToolError {
                         epoch_ms: ts,
                         category: classify_error(&output),
-                        excerpt: output
-                            .split_whitespace()
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                            .chars()
-                            .take(200)
-                            .collect(),
+                        excerpt: diagnostic_excerpt(&output),
                         tool,
                         target,
                     });
@@ -484,6 +566,58 @@ pub fn token_totals(text: &str) -> TokenTotals {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn failed_command(output: &str) -> String {
+        serde_json::json!({"timestamp":"2026-01-01T00:00:00Z", "type":"event_msg", "payload":{
+            "type":"item_completed", "item":{"type":"CommandExecution", "command":"cargo test",
+                "exit_code":101, "aggregated_output":output}}})
+        .to_string()
+    }
+
+    #[test]
+    fn colorized_diagnostics_are_kept_without_terminal_escape_sequences() {
+        let output = format!(
+            "{}\n\u{1b}[31merror[E0308]: mismatched types\u{1b}[0m\n  --> src/example.rs:10:2",
+            "Compiling example\n".repeat(40)
+        );
+        let errors = extract_tool_errors(&failed_command(&output));
+        assert!(errors[0].excerpt.contains("error[E0308]: mismatched types"));
+        assert!(errors[0].excerpt.contains("src/example.rs:10:2"));
+        assert!(!errors[0].excerpt.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn error_excerpt_keeps_failure_name_diagnostic_and_location_after_build_noise() {
+        let output = format!(
+            "{}\n---- checks::rejects_invalid_input stdout ----\nthread 'checks::rejects_invalid_input' panicked at src/check.rs:42:7:\nassertion `left == right` failed\ntest result: FAILED. 1 failed",
+            "Compiling example crate\n".repeat(40)
+        );
+        let errors = extract_tool_errors(&failed_command(&output));
+        assert_eq!(errors.len(), 1);
+        let excerpt = &errors[0].excerpt;
+        assert!(
+            excerpt.contains("checks::rejects_invalid_input"),
+            "{excerpt}"
+        );
+        assert!(
+            excerpt.contains("assertion `left == right` failed"),
+            "{excerpt}"
+        );
+        assert!(excerpt.contains("src/check.rs:42:7"), "{excerpt}");
+        assert!(excerpt.chars().count() <= 200);
+        assert!(!excerpt.contains("Compiling"));
+    }
+
+    #[test]
+    fn error_excerpt_is_bounded_for_long_unicode_diagnostics() {
+        let output = format!(
+            "error: {}\n  --> /tmp/example/診断.rs:10:2",
+            "診断".repeat(180)
+        );
+        let errors = extract_tool_errors(&failed_command(&output));
+        assert!(errors[0].excerpt.chars().count() <= 200);
+        assert!(errors[0].excerpt.contains("/tmp/example/診断.rs:10:2"));
+    }
+
     #[test]
     fn modern_shell_argv_preserves_the_actual_script() {
         let text = r#"{"timestamp":"2026-01-01T00:00:00Z","type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","command":["/bin/zsh","-lc","cat /tmp/example/review/SKILL.md"],"exit_code":0}}}"#;

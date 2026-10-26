@@ -379,6 +379,14 @@ cost; `events.target` joins them.
 
 `token_totals` stores one replaceable row per session id: input, cached_input,
 output and reasoning_output. Re-analysis replaces counters, so repeated reads
-do not inflate totals. The analyzer version is `codex-1`. Session identities use session_meta ids (with filename fallback). Events are
+do not inflate totals. The analyzer version is `codex-2`: diagnostic excerpt
+selection and explicit failed-test summary precedence both change the extracted
+events. On upgrade, unchanged available rollouts are re-ingested once so stored excerpts and
+categories are repaired; pruned sources cannot be reconstructed. Reporting the
+subagent measurement gap uses existing events and does not itself require a
+schema or analyzer bump. `Store::observed_spawn_calls` counts only existing
+`events.kind = agent_spawn` rows; a spawn attempt is not a completed child run.
+
+Session identities use session_meta ids (with filename fallback). Events are
 replaced by session id as well as source path so archiving cannot duplicate them.
 Session projects use the recorded cwd rather than the rollout date directory.
