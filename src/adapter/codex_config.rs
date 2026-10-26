@@ -135,16 +135,19 @@ mod tests {
     struct Fixture(std::path::PathBuf);
     impl Fixture {
         fn new() -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "codexlens-config-example-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
-            ));
-            std::fs::create_dir_all(&path).unwrap();
-            Self(path)
+            static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            loop {
+                let path = std::env::temp_dir().join(format!(
+                    "codexlens-config-example-{}-{}",
+                    std::process::id(),
+                    NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                ));
+                match std::fs::create_dir(&path) {
+                    Ok(()) => return Self(path),
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) => panic!("create config fixture {}: {error}", path.display()),
+                }
+            }
         }
         fn write(&self, relative: &str, text: &str) {
             let path = self.0.join(relative);

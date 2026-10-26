@@ -5,16 +5,19 @@ use std::process::Command;
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "codexlens-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
-        Self(root)
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        loop {
+            let root = std::env::temp_dir().join(format!(
+                "codexlens-test-{}-{}",
+                std::process::id(),
+                NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            ));
+            match std::fs::create_dir(&root) {
+                Ok(()) => return Self(root),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("create test fixture {}: {error}", root.display()),
+            }
+        }
     }
     fn write(&self, relative: &str, text: &str) {
         let path = self.0.join(relative);

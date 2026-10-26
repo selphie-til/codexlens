@@ -61,3 +61,22 @@ Project-local guardrails live in `.claude/rules/`.
 Codex input formats live in `src/adapter/codex.rs` and `codex_config.rs`.
 `transcript.rs` and `config.rs` retain upstream parsing helpers and regression
 tests; the CLI does not ingest Claude transcripts. Never commit live rollouts.
+
+## File map and verification
+
+Run repository commands with this repository as the explicit workdir. Discover
+paths with `rg --files` before searching guessed filenames or directories.
+
+| Concern | File |
+| --- | --- |
+| Configuration surfaces and startup costs | `src/core/surface.rs` |
+| Optimization findings and Markdown briefing | `src/core/optimize.rs` |
+| CLI commands and reporting | `src/cli.rs` |
+| SQLite schema and persistence | `src/store.rs` |
+| Codex transcript parsing | `src/adapter/codex.rs` |
+| Codex configuration parsing | `src/adapter/codex_config.rs` |
+| CLI integration tests | `tests/codex_cli.rs` |
+
+Run the affected tests first, then `cargo test`, `cargo fmt --check`, and
+`cargo clippy`. Keep the default parallel test execution; isolate temporary
+fixtures rather than serializing tests or weakening assertions to hide failures.

@@ -42,6 +42,11 @@ scope, and the effective join"). Scope is also the routing key for reports: a
 wedge on a project-scoped surface is that project's finding, not a global one
 (`cli.md` `--scope`).
 
+Global ownership is preserved during project discovery: an ancestor HOME must
+not install a second project-scoped copy of its global skills or configuration.
+Only genuine project declarations can shadow a global surface. Discovery
+boundaries and symlink handling are specified in `config-format.md`.
+
 ### Usage-measurable vs catalog-only surfaces
 
 Not every surface kind emits a usage signal, and conflating the two is the
