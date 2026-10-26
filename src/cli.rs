@@ -60,7 +60,7 @@ enum Command {
         #[arg(long)]
         db: Option<PathBuf>,
     },
-    /// How often each skill ran and what it cost — per skill, or over time
+    /// Session token totals and observed skill loads — per skill, or over time
     /// with --by.
     Usage {
         /// Bucket usage by time: year | month | week | day | hour (JST).
@@ -124,7 +124,7 @@ enum Command {
         #[arg(long)]
         db: Option<PathBuf>,
     },
-    /// How you steer Claude: the mix of instructing, steering ("go ahead"),
+    /// How you steer Codex: the mix of instructing, steering ("go ahead"),
     /// correcting ("no, instead…"), and questioning prompts — and what that
     /// mix suggests changing.
     Prompts {
@@ -156,7 +156,7 @@ enum Command {
         #[arg(long)]
         db: Option<PathBuf>,
     },
-    /// Files Claude kept re-editing in rapid bursts — where it got stuck
+    /// Files Codex kept re-editing in rapid bursts — where it got stuck
     /// retrying instead of making progress.
     Stuck {
         /// Output format: table | markdown.
@@ -1180,7 +1180,7 @@ fn shorten_to_tilde(path: &str, home: Option<&str>) -> String {
     }
 }
 
-/// Thrash bursts: a file edited many times in a short window — where Claude got
+/// Thrash bursts: a file edited many times in a short window — where Codex got
 /// stuck and kept retrying, as opposed to a hotspot's healthy spread-out edits.
 /// An episode is one session's edits to one path, so parallel work on a
 /// same-named file is never presented as one agent looping (`core::thrash`).
@@ -1211,7 +1211,7 @@ fn stuck(format: Format, frozen: bool, db: &Path) -> Result<()> {
     }
     preamble(
         format,
-        "Files Claude kept re-editing in rapid bursts — the signature of getting stuck\n\
+        "Files Codex kept re-editing in rapid bursts — the signature of getting stuck\n\
          and retrying. Worth checking what blocked it there (a rule? missing context?).",
     );
     let rows: Vec<Vec<String>> = episodes
@@ -1235,7 +1235,7 @@ fn stuck(format: Format, frozen: bool, db: &Path) -> Result<()> {
     );
     note(&format!(
         "bursts of >= {MIN_EDITS} edits to one file within {}m by a single session —\n\
-         likely where Claude got stuck. `--format json` carries the session id and\n\
+         likely where Codex got stuck. `--format json` carries the session id and\n\
          full path to investigate with.",
         GAP_SECS / 60
     ));
@@ -1424,7 +1424,7 @@ fn prompts(format: Format, frozen: bool, db: &Path) -> Result<()> {
 
     preamble(
         format,
-        "How you steer Claude, classified per prompt: instruct (substantive asks),\n\
+        "How you steer Codex, classified per prompt: instruct (substantive asks),\n\
          steer (\"go ahead\" / \"yes\"), correct (\"no, instead…\"), question. Lots of\n\
          steering = room for more autonomy; lots of correcting = unclear upfront specs.",
     );
