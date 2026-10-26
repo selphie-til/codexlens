@@ -21,7 +21,7 @@ prematurely). A change to code maps to the spec that owns its concern:
 | Concern in code | Owning spec |
 | --- | --- |
 | Raw transcript parsing (record types, field names, file layout) | `docs/specs/session-format.md` |
-| Config parsing (skills, rules, `settings.json`, MCP schemas, `CLAUDE.md`) and static-cost weighing | `docs/specs/config-format.md` |
+| Config parsing (skills, rules, `settings.json`, MCP schemas, `AGENTS.md`) and static-cost weighing | `docs/specs/config-format.md` |
 | Event extraction, metric computation, span/nesting, subagent attribution (the pure core) | `docs/specs/events.md` |
 | The configuration-surface catalog and the cost×usage join (optimization wedges) | `docs/specs/surfaces.md` |
 | SQLite schema, incremental ingest, idempotency (the store layer) | `docs/specs/storage.md` |

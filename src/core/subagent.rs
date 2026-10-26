@@ -90,7 +90,7 @@ pub fn link_runs(runs: &mut [SubagentRun]) {
 /// The total and the rows come from different records and can disagree: a
 /// session's total survives as long as the store does, while its per-agent
 /// rows exist only if the transcript was still on disk when run extraction
-/// ran over it. Claude Code prunes transcripts on its own schedule, so a store
+/// ran over it. Codex prunes transcripts on its own schedule, so a store
 /// analyzed before runs were extracted keeps totals whose rows can never be
 /// recovered — and the rows that *were* extracted would pass for the whole
 /// breakdown unless the gap is reported beside them. Every report that prints
@@ -236,7 +236,7 @@ mod tests {
     #[test]
     fn rows_short_of_the_total_are_a_partial_split() {
         // Sessions analyzed before per-run extraction keep their totals, but
-        // once Claude Code pruned their transcripts the runs can never be
+        // once Codex pruned their transcripts the runs can never be
         // extracted — so the rows that were cover only a fraction.
         let coverage = SplitCoverage::new(3_093_466, 375, [(11, 315_663), (14, 62_067)]);
         assert_eq!(coverage.known_tokens, 377_730);

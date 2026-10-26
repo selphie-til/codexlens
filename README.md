@@ -1,211 +1,103 @@
-# cclens
+# codexlens
 
-A lens onto your Claude Code usage. `cclens` reads your session transcripts and
-live configuration, extracts them into a local SQLite store, and shows **where
-time, tokens, and effort are being wasted — and how to fix it**: unused or heavy
-config, recurring tool failures, where the work gets stuck, and the cost picture
-behind it all.
+A local lens onto your OpenAI Codex usage. Ported from
+[lambdalisue/cclens](https://github.com/lambdalisue/cclens), preserving its Rust
+analysis core, SQLite store, reports, history and MIT license.
 
-The design intent lives in [`docs/specs/`](docs/specs/); this README is how to
-run it.
-
-## Install / build
-
-With Homebrew (macOS and Linux, Intel and arm):
+## Install
 
 ```sh
-brew install lambdalisue/cclens/cclens
+cargo install --git https://github.com/selphie-til/codexlens
+# or from a checkout
+cargo install --path .
 ```
 
-With Cargo, from [crates.io](https://crates.io/crates/cclens) (builds from
-source; bundled SQLite needs a C compiler):
+No API key or cloud service is required. Rust stable and a C compiler are needed
+for the bundled SQLite library. This project is not yet published to crates.io
+or Homebrew.
+
+## Use
 
 ```sh
-cargo install cclens
+codexlens doctor
+codexlens usage --format json
+codexlens usage --by day
+codexlens failures
+codexlens inventory
+codexlens overhead
+codexlens waste
+codexlens prompts
+codexlens stuck
+codexlens sql 'SELECT * FROM token_totals'
+codexlens optimize --print
+codexlens optimize --scope global
 ```
 
-With Nix (no toolchain to set up):
+`analyze` reads `$CODEX_HOME` (default `~/.codex`), recursively collecting
+`sessions/` and `archived_sessions/`. Override the input with
+`codexlens analyze --projects /path/to/sessions`. Configuration is read from
+`$CODEX_HOME/config.toml`, global `AGENTS.override.md` / `AGENTS.md`, skills under
+`$CODEX_HOME/skills` and `~/.agents/skills`, and the corresponding project
+`AGENTS.md`, `.agents/skills` and `.codex/config.toml` files. Project identity
+comes from session metadata, not the dated directory name.
+
+Reports refresh incrementally. Use `--frozen` to inspect the existing store.
+Every command accepts `--db /path/to/store.db`; the default is
+`${XDG_STATE_HOME:-~/.local/state}/codexlens/codexlens.db`. The store retains
+extracted history after rollouts disappear; treat it as private user data.
+`sql` accepts read-only SQL; `--format json` is available for reports.
+
+`optimize` opens the installed `codex` CLI with a briefing in a private temporary
+file. `--print` renders the prompt without launching a session. Analysis itself
+is local and read-only over the input; an optimizer session may send findings
+to the model according to your Codex configuration.
+
+## Codex skills
+
+Copy any desired directory under `skills/` into `~/.agents/skills/`:
+
+- `$codexlens-doctor`: present the health report.
+- `$codexlens-optimize`: investigate findings and propose configuration changes.
+- `$codexlens-query`: answer usage questions with read-only SQL.
+
+Install the binary first. These are portable Codex skills, not a Claude plugin
+marketplace.
+
+## Interpretation and coverage
+
+- Token totals prefer modern per-response usage records, with cumulative
+  rollout counter increments as a fallback; repeated snapshots
+  are deduplicated. Cached input is included in input; reasoning output is
+  included in output. These are usage observations, not a billing ledger.
+- A skill read through an explicit `cat`, `head`, or `sed` shell call is a load
+  signal. It cannot prove the skill was followed; other loading paths may leave
+  no observable signal. Investigate an "unused" finding before deleting a skill.
+- Skill costs cover the interval after the observed read, ending at the next
+  load or human turn. `usage --by` buckets **skill spans**, not all session tokens.
+- Child rollouts are analyzed independently. Spawn counts are observable, but
+  parent/child token attribution is not implemented; subagent split fields are
+  unavailable (legacy report fields currently remain zero).
+- Shell command failures, function/custom-tool outputs, MCP calls, patch file
+  edits, prompt classes and startup context estimates are supported. Shell
+  scripts wrapping multiple calls and unsupported tool output shapes may reduce
+  coverage. Hook/permission inventories, plugin caches and dynamic MCP schema
+  sizes are not reconstructed.
+- Static token weights are estimates. Instruction weights do not model runtime
+  truncation, custom fallback filenames, project trust, or all config overrides.
+  A config inventory records installed declarations, not effective runtime state.
+- Rollout formats evolve. Unknown and malformed lines are skipped, and unknown
+  values remain unknown. The legacy Claude adapters remain only as reusable
+  helpers and regression tests; normal analysis reads Codex rollouts.
+
+## Develop
 
 ```sh
-nix run github:lambdalisue/cclens -- doctor   # run without installing
-nix profile install github:lambdalisue/cclens  # install `cclens` onto PATH
-nix profile install github:lambdalisue/cclens/vX.Y.Z  # a specific release
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+cargo build --release
 ```
 
-From source — dev tools are pinned by the Nix flake, tasks run via `just`:
-
-```sh
-nix develop          # enter the dev shell (pinned rust, just, sqlite, …)
-just                 # list tasks
-just check           # rustfmt --check + clippy (the CI gate)
-just test            # cargo test
-just build           # release binary at target/release/cclens
-```
-
-Plain Cargo also works (`cargo build --release`) if you have a recent stable
-Rust; the flake just pins it. CI runs `nix develop -c just check` / `just test`.
-
-Publishing a GitHub Release for a `vX.Y.Z` tag builds binaries for Linux, macOS,
-and Windows (x86_64 and arm64 each), attaches them to that release with
-`.sha256` files, points the
-[`lambdalisue/homebrew-cclens`](https://github.com/lambdalisue/homebrew-cclens)
-tap at the new archives, and publishes the crate to crates.io. The release is
-published before its assets are built, so the notes are visible for a few
-minutes with nothing attached yet.
-
-The tag is the only place a version is written down: the release workflow
-rewrites `version` in `Cargo.toml` from it before building and publishing, so
-the committed `0.0.0` is a placeholder and cutting a release never means
-bumping a file first. The flake stamps it too, without being told the tag:
-`VERSION` is marked `export-subst`, so the archive GitHub serves for the tag
-carries the tag in it (see
-[nix-github-release](https://github.com/lambdalisue/nix-github-release)).
-
-The tap covers Linux and macOS only; on Windows, take the `-pc-windows-msvc`
-archive for your arch from the release, or build from source. `CLAUDE_CONFIG_DIR`
-names the config tree directly when it is set to a non-empty path, as it does
-for Claude Code itself. Otherwise — including when the variable is set but
-empty — `~/.claude` is located through `HOME`, falling back to `USERPROFILE`
-where Windows leaves `HOME` unset.
-
-## Claude Code plugin
-
-The repository is also a Claude Code plugin marketplace
-([`.claude-plugin/`](.claude-plugin/) + [`plugins/cclens/`](plugins/cclens/)),
-so you can drive cclens from inside a Claude Code session:
-
-```
-/plugin marketplace add lambdalisue/cclens
-/plugin install cclens@cclens
-```
-
-| Skill | What it does |
-| --- | --- |
-| `/cclens:doctor` | Analyze and present the one-screen health check in the session. |
-| `/cclens:optimize` | The `cclens optimize` advisor, in the **current** session: investigate the findings to root cause and propose concrete config fixes. |
-| `/cclens:query` | Answer an ad-hoc usage question with read-only SQL over the store. |
-
-The skills use the `cclens` binary when it is on PATH and fall back to
-`nix run github:lambdalisue/cclens` otherwise. They read and write the same
-per-user store as the CLI.
-
-## Quick start
-
-```sh
-# 1. Start here — a one-screen health check, split into what to fix globally
-#    (~/.claude) vs per project. Analyzes automatically on first run.
-cclens doctor
-
-# 2. Narrow to the layer you're optimizing.
-cclens doctor --scope global
-cclens doctor --scope project:<slug>
-
-# 3. Act on the findings: hand them to an interactive `claude` session that
-#    investigates each root cause and proposes concrete fixes.
-cclens optimize --scope global
-```
-
-Analysis reads your transcripts (`~/.claude/projects`) and live config —
-`~/.claude/*` plus each analyzed project's own `.claude/` / `CLAUDE.md` —
-**read-only** and incrementally, writing the store. Nothing is sent anywhere;
-the store is a local file. Every command takes `--db <path>`; it defaults to
-`${XDG_STATE_HOME:-~/.local/state}/cclens/cclens.db` — one per-user store,
-because what is analyzed spans every project, not the directory you run from.
-Pass `--db ./cclens.db` if you deliberately want a project-local one (and
-`.gitignore` it). Read commands refresh the store automatically before reporting
-(unchanged transcripts are skipped, so this is fast) and print a freshness line
-on stderr; pass `--frozen` to read the store exactly as it is. Running
-`cclens analyze` yourself is only needed to refresh without reading.
-
-## Commands
-
-### Pipeline
-
-| Command | What it does |
-| --- | --- |
-| `cclens doctor` | The health check, split global / per-project — **start here**. |
-| `cclens analyze` | Extract transcripts + config into the store (incremental). Reads run it automatically. |
-| `cclens sql '<query>'` | Run an arbitrary read-only SQL query against the store (see below). |
-| `cclens optimize` | Hand the findings to an interactive `claude` session to act on. |
-
-`--scope global | project | project:<slug>` (on `doctor`, `failures`,
-`waste`, `inventory`, `optimize`) restricts a report to the config layer being
-optimized: an unused/heavy config finding routes by where that file is
-installed, and a recurring failure belongs to the project that owns a strict
-majority of it — otherwise it is a cross-project habit and shows up as global.
-
-### Views
-
-Each is a curated lens that carries logic a raw query cannot (a classification,
-an algorithm, a suggestion). Add `--format markdown` to paste into a PR or
-note, or `--format json` (every command, `doctor` and `analyze` included) for
-typed machine-readable output — stdout carries nothing but the JSON, since all
-freshness chatter goes to stderr. Human output is colorized on a terminal;
-`NO_COLOR` or piping turns it off.
-
-```sh
-cclens waste                 # ranked optimization opportunities, with a suggested action
-cclens waste --scope global  # …only what a global-config cleanup should touch
-cclens inventory               # every installed surface (with its scope) × its actual usage
-cclens overhead               # always-on context per session, reconciled vs your config
-cclens usage                  # per-skill usage, most-invoked first
-cclens usage --by month       # usage per time bucket (JST: year|month|week|day|hour)
-cclens failures               # recurring tool failures by category, ranked, with fixes
-cclens failures --scope global          # failures no project owns (a cross-project habit)
-cclens failures --scope project:<slug>  # one project's failures (fix lands in its config)
-cclens prompts                # how you steer the session (steer/correct/question/instruct)
-cclens stuck                 # files Claude got stuck re-editing in rapid bursts
-```
-
-### `sql` — query the store directly
-
-Anything the curated views don't cover is a SQL query — the store is the whole
-point. The query is an argument, or read from **stdin**:
-
-```sh
-# Which tool produces each failure category?
-cclens sql "SELECT category, tool, COUNT(*) n FROM tool_errors GROUP BY 1,2 ORDER BY n DESC"
-
-# The actual failing paths behind path-not-found (stdin form):
-echo "SELECT excerpt FROM tool_errors WHERE category='path-not-found'" | cclens sql
-
-# Discover the schema:
-cclens sql "SELECT sql FROM sqlite_master"
-```
-
-The `tool_errors` view names the failure columns (`category`, `excerpt`,
-`tool`, `project`); the db is opened read-only, so a query can never mutate the
-derived store.
-
-## What it covers
-
-- **Every configuration surface** — skills, rules, agents, MCP servers,
-  `CLAUDE.md` — catalogued with its startup and on-demand token costs and load
-  mode, joined
-  against actual usage to flag unused (delete), always-on heavy (slim), and
-  costly+rare (trim).
-- **Where the work stumbles** — recurring tool failures by category and
-  originating tool (`failures`), files Claude got stuck re-editing (`stuck`),
-  each with concrete examples and the project it concentrates in.
-- **Where tokens go** — main-thread skill output vs. subagent cost, the subagent
-  half split per agent type (which agents actually spent it, nested spawns
-  included), and the always-on context floor reconciled against your readable
-  config (the residual is system + tools + MCP you cannot trim from files).
-- **How you prompt** — the steer / correct / question / instruct mix.
-
-## Notes
-
-- Counts are usage signals for ranking, **not a billing ledger**; static cost is
-  a token estimate, not a measured runtime figure.
-- The store outlives your transcripts. Claude Code prunes those on its own
-  retention schedule, and cclens keeps the rows it already extracted — so the db
-  holds history that `~/.claude/projects` no longer can, and deleting it is a
-  real loss, not a cache flush. That is why it lives under
-  `${XDG_STATE_HOME:-~/.local/state}/cclens/` rather than a cache directory a
-  cleaner may empty. Upgrading cclens across a schema change migrates the file
-  in place; you never need to delete it.
-- `optimize` launches `claude` (Claude Code) seeded with the findings; the
-  briefing is written to a private temp file, never passed on the command line.
-- Not yet implemented (see [`docs/specs/`](docs/specs/)): meta-skill (`loop`)
-  nesting — a pending design decision on detecting parent/child from the
-  transcript.
+Synthetic fixtures only: never commit real session logs, configuration secrets,
+or generated stores. See `AGENTS.md` and `docs/specs/` for the implementation
+contract and supported input shapes.

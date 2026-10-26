@@ -7,10 +7,10 @@ paths:
 
 # Session Data Privacy — Synthetic Fixtures Only
 
-Real Claude Code transcripts under `~/.claude/projects/` contain personal and
+Real Codex transcripts under `~/.codex/projects/` contain personal and
 proprietary data: prompts, file contents, paths, project names, tool output.
-Real Claude Code config is just as sensitive — `settings.json` can hold API
-tokens and secrets, and `CLAUDE.md` / rules can carry private project context.
+Real Codex config is just as sensitive — `settings.json` can hold API
+tokens and secrets, and `AGENTS.md` / rules can carry private project context.
 None of it — transcript or config — may enter the repository.
 
 ## Hard rules
@@ -20,13 +20,13 @@ None of it — transcript or config — may enter the repository.
   a realistic shape, construct a minimal record with invented ids, neutral
   paths (`/tmp/example`), and placeholder text.
 - **Never commit harvested data or generated output.** Real `*.jsonl`
-  transcripts, copied real config (`settings.json`, `CLAUDE.md`, skills, rules),
+  transcripts, copied real config (`settings.json`, `AGENTS.md`, skills, rules),
   the generated SQLite database, and any scratch export stay out of git.
   `.gitignore` enforces this, but do not defeat it with `git add -f`.
 - **No real ids or paths in code or tests.** Session ids, agent ids, prompt
   ids, cwd slugs, and project names in fixtures must be fabricated.
 - **Exploration happens against the live directory, read-only.** When verifying
-  behavior against real data, read from `~/.claude/projects/` directly at
+  behavior against real data, read from `~/.codex/projects/` directly at
   runtime; never copy those files into the tree.
 
 ## Why

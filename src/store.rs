@@ -1,5 +1,5 @@
 //! SQLite store: persist extracted spans as events and query them back. This
-//! layer knows SQL but nothing about raw Claude Code formats. See
+//! layer knows SQL but nothing about raw Codex formats. See
 //! `docs/specs/storage.md`.
 //!
 //! The schema tracks the spec's `events` table; `attrs_json` is the one column
@@ -24,9 +24,16 @@ const ANALYZER_META_KEY: &str = "analyzer_version";
 /// only way rows behind the incremental-ingest skip get rebuilt. It is not the
 /// crate version: a release that changes no analysis should not force everyone
 /// through a full re-analyze.
-const ANALYZER_VERSION: &str = "3";
+const ANALYZER_VERSION: &str = "codex-1";
 
 const SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS token_totals (
+    session_id TEXT PRIMARY KEY,
+    input INTEGER NOT NULL,
+    cached_input INTEGER NOT NULL,
+    output INTEGER NOT NULL,
+    reasoning_output INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS sessions (
     id              TEXT PRIMARY KEY,
     project         TEXT NOT NULL,
@@ -146,7 +153,7 @@ WHERE e.kind = 'tool_error';
 /// converges any older store onto the declared schema in place.
 const SCHEMA_VERSION: i64 = 1;
 
-/// Tables holding analysis history. Claude Code prunes transcripts on its own
+/// Tables holding analysis history. Codex prunes transcripts on its own
 /// retention schedule, after which these rows are the only surviving record of
 /// those sessions — so a shape change adds columns in place, never rebuilds.
 const MIGRATED_TABLES: [&str; 4] = ["sessions", "events", "ingested_files", "meta"];
@@ -259,7 +266,7 @@ fn create_private_dir_all(dir: &std::path::Path) -> std::io::Result<()> {
 /// inherit the mode for the rollback journal it writes beside the database.
 ///
 /// An existing store is narrowed rather than left alone: a store an older
-/// cclens created under the umask is the realistic case, and nobody
+/// codexlens created under the umask is the realistic case, and nobody
 /// deliberately shares this store. Only a regular file is touched, so pointing
 /// `--db` at a directory fails at SQLite instead of silently re-moding it, and
 /// a store owned by someone else is left as it is — re-moding it is not this
@@ -386,6 +393,30 @@ impl Store {
     /// re-ingest keyed on `source_path`; see `docs/specs/storage.md`). `spans`
     /// are skill executions with cost; `usage` are point events (agent spawns,
     /// MCP tool calls) counted for the catalog join.
+    pub fn ingest_token_totals(
+        &self,
+        session: &str,
+        totals: &crate::core::metrics::TokenTotals,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO token_totals VALUES (?1,?2,?3,?4,?5)",
+            rusqlite::params![
+                session,
+                totals.input,
+                totals.cached_input,
+                totals.output,
+                totals.reasoning_output
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn token_totals(&self) -> Result<crate::core::metrics::TokenTotals> {
+        Ok(self.conn.query_row("SELECT COALESCE(SUM(input),0), COALESCE(SUM(cached_input),0), COALESCE(SUM(output),0), COALESCE(SUM(reasoning_output),0) FROM token_totals", [], |r| {
+            Ok(crate::core::metrics::TokenTotals { input: r.get(0)?, cached_input: r.get(1)?, output: r.get(2)?, reasoning_output: r.get(3)? })
+        })?)
+    }
+
     pub fn ingest_session(
         &mut self,
         session: &SessionMeta,
@@ -422,8 +453,8 @@ impl Store {
             ),
         )?;
         tx.execute(
-            "DELETE FROM events WHERE source_path = ?1",
-            (&session.source_path,),
+            "DELETE FROM events WHERE source_path = ?1 OR session_id = ?2",
+            (&session.source_path, &session.id),
         )?;
         // One `session_start` event per session that carried an observable
         // start context — the always-on floor `overhead` reports. It is stamped
@@ -834,7 +865,7 @@ impl Store {
     }
 
     /// Total startup tokens of **global** config — what every session pays
-    /// unconditionally from `~/.claude` regardless of project: always-on files
+    /// unconditionally from `~/.codex` regardless of project: always-on files
     /// in full, plus the descriptions skills and agents contribute to the
     /// startup listing. Bodies that wait to be invoked weigh nothing here, and a
     /// surface whose startup weight is unknown (an MCP schema) is left out of
@@ -1113,7 +1144,7 @@ impl Store {
     /// figure plus that project's own startup cost.
     ///
     /// A surface installed at both scopes under the same `(kind, id)` is counted
-    /// twice here. Resolving that would mean asserting which copy Claude Code
+    /// twice here. Resolving that would mean asserting which copy Codex
     /// actually loads, and the shadowing model this store implements is defined
     /// for the **usage join** (`effective_catalog`), not for load order — a
     /// project rule and its global namesake genuinely both reach the context, so
@@ -1141,12 +1172,12 @@ impl Store {
 fn migrate(conn: &mut Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if version > SCHEMA_VERSION {
-        // Reconciliation only ever adds; it cannot undo a newer cclens's
+        // Reconciliation only ever adds; it cannot undo a newer codexlens's
         // changes, and writing this build's shape over them would corrupt a
         // store that binary still reads correctly.
         anyhow::bail!(
-            "the store was written by a newer cclens (schema v{version}; this build knows \
-             v{SCHEMA_VERSION}) — upgrade cclens to read it"
+            "the store was written by a newer codexlens (schema v{version}; this build knows \
+             v{SCHEMA_VERSION}) — upgrade codexlens to read it"
         );
     }
 
@@ -1351,8 +1382,8 @@ mod tests {
     /// and the store must come out owner-only.
     #[test]
     fn open_creates_a_missing_directory_and_keeps_both_owner_only() {
-        let dir = std::env::temp_dir().join(format!("cclens-open-test-{}", std::process::id()));
-        let path = dir.join("cclens").join("cclens.db");
+        let dir = std::env::temp_dir().join(format!("codexlens-open-test-{}", std::process::id()));
+        let path = dir.join("codexlens").join("codexlens.db");
         let _ = std::fs::remove_dir_all(&dir);
 
         drop(Store::open(&path).unwrap());
@@ -1369,7 +1400,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// The store an older cclens left under the umask is the case that actually
+    /// The store an older codexlens left under the umask is the case that actually
     /// exists in the wild, so opening it has to narrow it — otherwise the
     /// protection never reaches anyone who already ran the tool.
     #[cfg(unix)]
@@ -1377,8 +1408,8 @@ mod tests {
     fn open_narrows_a_store_an_earlier_run_left_readable() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = std::env::temp_dir().join(format!("cclens-mode-test-{}", std::process::id()));
-        let path = dir.join("cclens.db");
+        let dir = std::env::temp_dir().join(format!("codexlens-mode-test-{}", std::process::id()));
+        let path = dir.join("codexlens.db");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         drop(Store::open(&path).unwrap());
@@ -1751,7 +1782,7 @@ mod tests {
         );
     }
 
-    /// A store as an older cclens left it: `sessions` without the columns later
+    /// A store as an older codexlens left it: `sessions` without the columns later
     /// releases added, and `surfaces` still keyed without `project`.
     fn legacy_store() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -1779,7 +1810,7 @@ mod tests {
 
     #[test]
     fn a_legacy_store_gains_missing_columns_without_losing_its_history() {
-        // The rows are irreplaceable once Claude Code has pruned the source
+        // The rows are irreplaceable once Codex has pruned the source
         // transcripts, so upgrading must add the columns in place.
         let conn = legacy_store();
         conn.execute(
@@ -1868,9 +1899,9 @@ mod tests {
     }
 
     #[test]
-    fn a_store_written_by_a_newer_cclens_is_refused_without_advising_deletion() {
+    fn a_store_written_by_a_newer_codexlens_is_refused_without_advising_deletion() {
         // Writing to it with this binary's schema would corrupt history the
-        // newer cclens can still read; deleting it would throw that history away.
+        // newer codexlens can still read; deleting it would throw that history away.
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(&format!("PRAGMA user_version = {};", SCHEMA_VERSION + 1))
             .unwrap();
@@ -2257,7 +2288,7 @@ mod tests {
                     kind: "claude_md".to_string(),
                     id: "global".to_string(),
                     scope: Scope::Global,
-                    config_path: "/c/CLAUDE.md".to_string(),
+                    config_path: "/c/AGENTS.md".to_string(),
                     static_tokens: Some(600),
                     startup_tokens: Some(600),
                     load_mode: LoadMode::StartupFull,
@@ -2284,12 +2315,12 @@ mod tests {
                     startup_tokens: None,
                     load_mode: LoadMode::ToolSchema,
                 },
-                // Another project's CLAUDE.md is always-on *there*, not globally.
+                // Another project's AGENTS.md is always-on *there*, not globally.
                 Surface {
                     kind: "claude_md".to_string(),
                     id: "project".to_string(),
                     scope: Scope::Project("alpha".to_string()),
-                    config_path: "/tmp/example/CLAUDE.md".to_string(),
+                    config_path: "/tmp/example/AGENTS.md".to_string(),
                     static_tokens: Some(400),
                     startup_tokens: Some(400),
                     load_mode: LoadMode::StartupFull,

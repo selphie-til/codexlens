@@ -1,85 +1,20 @@
 name: CI
-
 on:
   push:
     branches: [main]
   pull_request:
-
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  check:
-    name: lint + format (rustfmt, clippy)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: cachix/install-nix-action@v31
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-      # Pull prebuilt toolchain/deps and push what this run builds. Pushing needs
-      # the auth token; forks/PRs without the secret fall back to pull-only.
-      - uses: cachix/cachix-action@v17
-        with:
-          name: cclens
-          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
-      # Same pinned tools as local dev (flake devShell) — see flake.nix / justfile.
-      - run: nix develop -c just check
-
   test:
-    name: test
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: cachix/install-nix-action@v31
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-      - uses: cachix/cachix-action@v17
-        with:
-          name: cclens
-          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
-      - run: nix develop -c just test
-
-  # Built on each system the flake advertises, because the cache only helps the
-  # systems it actually holds: a build pushed from Linux does nothing for a mac
-  # user, who would compile from source — the exact thing the substituter in
-  # flake.nix exists to prevent. x86_64-darwin is the gap, and it stays one until
-  # this needs an Intel macOS runner badly enough to pay for the wait.
-  #
-  # Built from the archive GitHub serves for the commit rather than from the
-  # checkout: only the archive has VERSION filled in, so only its build is the
-  # one `nix run github:lambdalisue/cclens` looks up in the cache.
-  build:
-    uses: lambdalisue/nix-github-release/.github/workflows/build.yml@v0.1.0
-    with:
-      cachix-cache: cclens
-    secrets:
-      cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-
-  # The same matrix the release publishes, so a target that stops compiling
-  # fails here rather than at the moment a release is cut. Archives are uploaded
-  # as run artifacts, which also makes a PR build downloadable for a quick check.
-  targets:
-    name: cross-platform build
-    uses: ./.github/workflows/build.yml
-    with:
-      tag: dev
-
-  # Whether the crate is still publishable, checked here for the same reason the
-  # matrix above is: manifest metadata that crates.io rejects would otherwise
-  # surface only once a release is published, and a crates.io version cannot be
-  # replaced. The dry run needs no credentials — it packages the crate, builds
-  # what it packaged, and stops before the upload. The version it packages is the
-  # committed placeholder, which is all this check needs — the release workflow
-  # supplies the real one.
-  package:
-    name: cargo publish --dry-run
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo publish --dry-run --locked
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked

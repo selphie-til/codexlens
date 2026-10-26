@@ -103,7 +103,7 @@ impl ErrorCategory {
             }
             ErrorCategory::CommandNotFound => "a missing tool; install it or note its absence",
             ErrorCategory::PathNotFound => {
-                "paths are being guessed wrong — a file map in CLAUDE.md would help"
+                "paths are being guessed wrong — a file map in AGENTS.md would help"
             }
             ErrorCategory::CompileError => {
                 "expected during iteration; spikes may signal a hard spot"

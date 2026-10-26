@@ -1,7 +1,12 @@
 # Surfaces Specification
 
-A **surface** is one configurable thing in a Claude Code setup — a skill, a
-rule, an MCP server, a hook, a permission, an `CLAUDE.md`, an agent. This spec
+Codex port status: these are inherited core algorithms and schema semantics.
+The active input coverage is defined in session-format.md and config-format.md;
+parent/child cost attribution and hook/permission inventories are not wired in.
+
+
+A **surface** is one configurable thing in a Codex setup — a skill, a
+rule, an MCP server, a hook, a permission, an `AGENTS.md`, an agent. This spec
 defines the surface catalog and the **catalog × usage join** that is the whole
 point of the tool (`architecture.md`): relating *what is installed and what it
 costs* (surfaces, from `config-format.md`) to *what was actually used and at what
@@ -129,7 +134,7 @@ rare** apply only to usage-measurable kinds — never to `rule` / `hook` /
   `attrs_json` or is scoped out of v1 like the AI layer.
 
 **Load mode** is a first-class part of a surface because the same static-token
-figure means something very different for a `CLAUDE.md` paid every session than
+figure means something very different for a `AGENTS.md` paid every session than
 for a skill body paid only when invoked — but load mode is an assumption, so the
 always-on wedge is confirmed empirically, not asserted:
 

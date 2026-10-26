@@ -1,5 +1,10 @@
 # Events Specification
 
+Codex port status: these are inherited core algorithms and schema semantics.
+The active input coverage is defined in session-format.md and config-format.md;
+parent/child cost attribution and hook/permission inventories are not wired in.
+
+
 An **event** is one timestamped occurrence the tool extracts from a transcript,
 carrying a runtime cost and pointing at the configuration surface it exercises.
 Events are the usage half of the catalog×usage model (`architecture.md`). This

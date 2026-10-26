@@ -8,37 +8,34 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
-use crate::adapter::config::{
-    claude_config_dir, read_agent_surfaces, read_claude_md_surfaces, read_mcp_server_surfaces,
-    read_project_surfaces, read_rule_surfaces, read_skill_surfaces,
+use crate::adapter::codex::{
+    count_permission_denials, discover_transcripts, extract_prompt_pointers, extract_tool_errors,
+    extract_work_events, parse_session, session_cwd,
 };
-use crate::adapter::transcript::{
-    count_permission_denials, extract_prompt_pointers, extract_tool_errors, extract_work_events,
-    parse_session, parse_subagent_sidecar, session_cwd, subagent_id_from_file_name,
-    subagent_prompt_id, subagent_sidecar_path, subagents_dir,
-};
+use crate::adapter::codex_config::codex_config_dir;
+use crate::adapter::codex_config::{read_global, read_project_surfaces};
 use crate::core::bucket::{Bucket, JST_OFFSET_SECS, bucket_label};
 use crate::core::friction::ErrorCategory;
 use crate::core::optimize as optimize_mod;
 use crate::core::scope::{ScopeFilter, split_friction};
 use crate::core::span::{DEFAULT_IDLE_GAP_MS, SessionStart, extract_spans, session_start};
-use crate::core::subagent::{SplitCoverage, SubagentRun, link_runs};
+use crate::core::subagent::{SplitCoverage, SubagentRun};
 use crate::core::surface::{
-    LoadMode, Scope, StartupSavings, Surface, Wedge, classify_wedge, is_usage_measurable,
+    LoadMode, StartupSavings, Surface, Wedge, classify_wedge, is_usage_measurable,
     on_demand_tokens, startup_savings,
 };
 use crate::core::thrash::detect_thrash;
-use crate::core::usage::{attribute_subagents, extract_usage_events, output_tokens};
+use crate::core::usage::{attribute_subagents, extract_usage_events};
 use crate::store::{SessionMeta, Store};
 
 #[derive(Parser)]
 #[command(
-    name = "cclens",
+    name = "codexlens",
     // Cargo.toml holds a placeholder that the release workflow and the flake
     // both stamp from the tag before building.
     version,
-    about = "See where your Claude Code time and tokens go, and which config to fix.\n\
-             Start with `cclens doctor`; every report explains itself and names the\n\
+    about = "See where your Codex time and tokens go, and which config to fix.\n\
+             Start with `codexlens doctor`; every report explains itself and names the\n\
              follow-up command."
 )]
 pub struct Cli {
@@ -52,14 +49,14 @@ enum Command {
     /// automatically before every report — call it directly only to refresh
     /// without reading anything.
     Analyze {
-        /// Transcript root (default: $CLAUDE_CONFIG_DIR/projects, or
-        /// ~/.claude/projects).
+        /// Transcript root (default: $CODEX_HOME (sessions and archived_sessions), or
+        /// ~/.codex).
         #[arg(long)]
         projects: Option<PathBuf>,
         /// Output format: table | json (the run's counters).
         #[arg(long)]
         format: Option<String>,
-        /// Store path (default: $XDG_STATE_HOME/cclens/cclens.db).
+        /// Store path (default: $XDG_STATE_HOME/codexlens/codexlens.db).
         #[arg(long)]
         db: Option<PathBuf>,
     },
@@ -75,14 +72,14 @@ enum Command {
         /// Read the store as-is; skip the automatic refresh.
         #[arg(long)]
         frozen: bool,
-        /// Store path (default: $XDG_STATE_HOME/cclens/cclens.db).
+        /// Store path (default: $XDG_STATE_HOME/codexlens/codexlens.db).
         #[arg(long)]
         db: Option<PathBuf>,
     },
     /// Everything installed in your config (skills, rules, agents, MCP
-    /// servers, CLAUDE.md), what it weighs, and whether it was ever used.
+    /// servers, AGENTS.md), what it weighs, and whether it was ever used.
     Inventory {
-        /// Show one config layer only: global (~/.claude) | project (all
+        /// Show one config layer only: global (~/.codex) | project (all
         /// projects' own config) | project:<slug> (one project's).
         #[arg(long)]
         scope: Option<String>,
@@ -92,7 +89,7 @@ enum Command {
         /// Read the store as-is; skip the automatic refresh.
         #[arg(long)]
         frozen: bool,
-        /// Store path (default: $XDG_STATE_HOME/cclens/cclens.db).
+        /// Store path (default: $XDG_STATE_HOME/codexlens/codexlens.db).
         #[arg(long)]
         db: Option<PathBuf>,
     },
@@ -100,7 +97,7 @@ enum Command {
     /// while heavy, or rarely worth its cost — ranked by what removing it
     /// actually saves.
     Waste {
-        /// Show one config layer only: global (~/.claude) | project (all
+        /// Show one config layer only: global (~/.codex) | project (all
         /// projects' own config) | project:<slug> (one project's).
         #[arg(long)]
         scope: Option<String>,
@@ -110,12 +107,12 @@ enum Command {
         /// Read the store as-is; skip the automatic refresh.
         #[arg(long)]
         frozen: bool,
-        /// Store path (default: $XDG_STATE_HOME/cclens/cclens.db).
+        /// Store path (default: $XDG_STATE_HOME/codexlens/codexlens.db).
         #[arg(long)]
         db: Option<PathBuf>,
     },
     /// What every session pays in context before any work starts, and how
-    /// much of that comes from your own config files vs Claude Code itself.
+    /// much of that comes from your own config files vs Codex itself.
     Overhead {
         /// Output format: table | markdown.
         #[arg(long)]
@@ -123,7 +120,7 @@ enum Command {
         /// Read the store as-is; skip the automatic refresh.
         #[arg(long)]
         frozen: bool,
-        /// Store path (default: $XDG_STATE_HOME/cclens/cclens.db).
+        /// Store path (default: $XDG_STATE_HOME/codexlens/codexlens.db).
         #[arg(long)]
         db: Option<PathBuf>,
     },
@@ -137,7 +134,7 @@ enum Command {
         /// Read the store as-is; skip the automatic refresh.
         #[arg(long)]
         frozen: bool,
-        /// Store path (default: $XDG_STATE_HOME/cclens/cclens.db).
+        /// Store path (default: $XDG_STATE_HOME/codexlens/codexlens.db).
         #[arg(long)]
         db: Option<PathBuf>,
     },
@@ -155,7 +152,7 @@ enum Command {
         /// Read the store as-is; skip the automatic refresh.
         #[arg(long)]
         frozen: bool,
-        /// Store path (default: $XDG_STATE_HOME/cclens/cclens.db).
+        /// Store path (default: $XDG_STATE_HOME/codexlens/codexlens.db).
         #[arg(long)]
         db: Option<PathBuf>,
     },
@@ -168,14 +165,14 @@ enum Command {
         /// Read the store as-is; skip the automatic refresh.
         #[arg(long)]
         frozen: bool,
-        /// Store path (default: $XDG_STATE_HOME/cclens/cclens.db).
+        /// Store path (default: $XDG_STATE_HOME/codexlens/codexlens.db).
         #[arg(long)]
         db: Option<PathBuf>,
     },
     /// The health check — what to fix first, what your sessions cost, and
     /// what is fine as-is. Start here.
     Doctor {
-        /// Show one config layer only: global (~/.claude) | project (all
+        /// Show one config layer only: global (~/.codex) | project (all
         /// projects' own config) | project:<slug> (one project's).
         #[arg(long)]
         scope: Option<String>,
@@ -185,7 +182,7 @@ enum Command {
         /// Read the store as-is; skip the automatic refresh.
         #[arg(long)]
         frozen: bool,
-        /// Store path (default: $XDG_STATE_HOME/cclens/cclens.db).
+        /// Store path (default: $XDG_STATE_HOME/codexlens/codexlens.db).
         #[arg(long)]
         db: Option<PathBuf>,
     },
@@ -198,30 +195,30 @@ enum Command {
         /// Output format: table | markdown.
         #[arg(long)]
         format: Option<String>,
-        /// Store path (default: $XDG_STATE_HOME/cclens/cclens.db).
+        /// Store path (default: $XDG_STATE_HOME/codexlens/codexlens.db).
         #[arg(long)]
         db: Option<PathBuf>,
     },
-    /// Act on the findings: opens an interactive `claude` session pre-loaded
+    /// Act on the findings: opens an interactive `codex` session pre-loaded
     /// with the full analysis, which investigates each problem and proposes
     /// concrete config edits for your approval.
     Optimize {
-        /// Transcript root (default: $CLAUDE_CONFIG_DIR/projects, or
-        /// ~/.claude/projects).
+        /// Transcript root (default: $CODEX_HOME (sessions and archived_sessions), or
+        /// ~/.codex).
         #[arg(long)]
         projects: Option<PathBuf>,
         /// Store to analyze into / read from (default:
-        /// $XDG_STATE_HOME/cclens/cclens.db).
+        /// $XDG_STATE_HOME/codexlens/codexlens.db).
         #[arg(long)]
         db: Option<PathBuf>,
-        /// Optimize one config layer only: global (~/.claude) | project |
+        /// Optimize one config layer only: global (~/.codex) | project |
         /// project:<slug>.
         #[arg(long)]
         scope: Option<String>,
         /// Use the existing store as-is; skip the analyze step.
         #[arg(long)]
         frozen: bool,
-        /// Print the composed prompt instead of launching `claude`.
+        /// Print the composed prompt instead of launching `codex`.
         #[arg(long)]
         print: bool,
     },
@@ -328,9 +325,9 @@ fn parse_scope(value: Option<&str>) -> Result<ScopeFilter> {
 }
 
 /// Analyze, compose the advisor prompt from the findings, and hand it to an
-/// interactive `claude` session — the AI-proposal layer's entry point. The pure
+/// interactive `codex` session — the AI-proposal layer's entry point. The pure
 /// composition lives in `core::optimize`; this shell does the I/O: run the
-/// analysis, read the store into `Findings`, then launch `claude`.
+/// analysis, read the store into `Findings`, then launch `codex`.
 ///
 /// The briefing carries concrete paths and error excerpts that may be sensitive,
 /// so it is written to a private (`0600`) temp file and only a pointer is passed
@@ -357,7 +354,7 @@ fn optimize(
     let store = Store::open(db).context("open store")?;
     let findings = collect_findings(&store)?;
 
-    // The absolute store path so the session's `cclens sql --db …` hits the
+    // The absolute store path so the session's `codexlens sql --db …` hits the
     // store this run built, wherever it is launched from.
     let db_display = std::fs::canonicalize(db)
         .map(|p| p.to_string_lossy().into_owned())
@@ -376,15 +373,15 @@ fn optimize(
     let briefing_path = write_private_tempfile(&briefing).context("write briefing temp file")?;
     let prompt = optimize_mod::launch_prompt(&briefing_path.to_string_lossy(), &db_display, filter);
 
-    // Hand over the terminal: `claude <prompt>` starts an interactive session,
+    // Hand over the terminal: `codex <prompt>` starts an interactive session,
     // inheriting our stdio so the user takes over. Clean up the briefing file
     // the moment the session ends, whatever the outcome.
-    let result = std::process::Command::new("claude").arg(&prompt).status();
+    let result = std::process::Command::new("codex").arg(&prompt).status();
     let _ = fs::remove_file(&briefing_path);
 
-    let status = result.context("launch `claude` — is Claude Code installed and on PATH?")?;
+    let status = result.context("launch `codex` — is Codex installed and on PATH?")?;
     if !status.success() {
-        anyhow::bail!("claude exited with {status}");
+        anyhow::bail!("codex exited with {status}");
     }
     Ok(())
 }
@@ -400,7 +397,7 @@ fn write_private_tempfile(contents: &str) -> Result<PathBuf> {
         .map_or(0, |elapsed| elapsed.as_nanos());
     let mut path = std::env::temp_dir();
     path.push(format!(
-        "cclens-briefing-{}-{nanos:x}.md",
+        "codexlens-briefing-{}-{nanos:x}.md",
         std::process::id()
     ));
     write_private_file(&path, contents)?;
@@ -707,7 +704,7 @@ fn config_wedges(store: &Store) -> Result<ScopedWedges> {
 
 /// Run a read-only SQL query against the store and print the result. The query
 /// comes from the argument or, when absent, from stdin — so both
-/// `cclens sql '…'` and `echo '…' | cclens sql` work. The store is
+/// `codexlens sql '…'` and `echo '…' | codexlens sql` work. The store is
 /// opened read-only so an ad-hoc query can never mutate the derived data.
 fn sql(query: Option<&str>, format: Format, db: &Path) -> Result<()> {
     let query = match query {
@@ -779,25 +776,34 @@ fn doctor(filter: &ScopeFilter, format: Format, frozen: bool, db: &Path) -> Resu
         return emit_json(&serde_json::json!({
             "global": global,
             "projects": projects,
+            "session_tokens": store.token_totals()?,
+            "coverage": {"skill_usage": "observed-loads", "subagent_cost_attribution": false},
         }));
     }
 
-    // The text form is written for someone who has never seen cclens's
+    // The text form is written for someone who has never seen codexlens's
     // vocabulary: every item says what happened, why it costs, and what to do
     // — prioritized, so the report reads top to bottom as a to-do list.
     let style = Style::stdout();
     let (session_count, project_count) = store.session_stats()?;
     if session_count == 0 {
-        println!("nothing analyzed yet — run `cclens analyze` first");
+        println!("nothing analyzed yet — run `codexlens analyze` first");
         return Ok(());
     }
     println!(
         "{}",
         style.heading(&format!(
-            "Claude Code usage health check — {session_count} sessions across \
+            "Codex usage health check — {session_count} sessions across \
              {project_count} projects"
         ))
     );
+
+    let totals = store.token_totals()?;
+    println!(
+        "All sessions: input {}, cached input {}, output {}, reasoning output {} (included in output)",
+        totals.input, totals.cached_input, totals.output, totals.reasoning_output
+    );
+    println!("Coverage: observed skill loads; parent/child cost attribution unavailable.");
 
     let visible: Vec<_> = f
         .projects
@@ -847,8 +853,8 @@ fn doctor(filter: &ScopeFilter, format: Format, frozen: bool, db: &Path) -> Resu
             ));
         }
         lines.push(format!(
-            "  Fix in this project's own CLAUDE.md / .claude — details: {}",
-            style.command(&format!("cclens failures --scope project:{}", p.project))
+            "  Fix in this project's own AGENTS.md / .codex — details: {}",
+            style.command(&format!("codexlens failures --scope project:{}", p.project))
         ));
         items.push(Item {
             weight: p.total_friction(),
@@ -871,9 +877,9 @@ fn doctor(filter: &ScopeFilter, format: Format, frozen: bool, db: &Path) -> Resu
                         ))
                     ),
                     format!(
-                        "  No single project owns it, so the fix belongs in ~/.claude — \
+                        "  No single project owns it, so the fix belongs in ~/.codex — \
                          details: {}",
-                        style.command("cclens failures --scope global")
+                        style.command("codexlens failures --scope global")
                     ),
                 ],
             });
@@ -888,7 +894,7 @@ fn doctor(filter: &ScopeFilter, format: Format, frozen: bool, db: &Path) -> Resu
                 weight: 0,
                 lines: vec![format!(
                     "{} of all Bash commands are just `cd` — a working-directory \
-                     convention in your global CLAUDE.md would cut the churn.",
+                     convention in your global AGENTS.md would cut the churn.",
                     style.warn(&format!("{cd_pct}%"))
                 )],
             });
@@ -901,7 +907,7 @@ fn doctor(filter: &ScopeFilter, format: Format, frozen: bool, db: &Path) -> Resu
                 lines: vec![format!(
                     "{steer}% of your prompts steer and {correct}% correct — rework that \
                      clearer upfront specs could cut. Details: {}",
-                    style.command("cclens prompts")
+                    style.command("codexlens prompts")
                 )],
             });
         }
@@ -923,7 +929,7 @@ fn doctor(filter: &ScopeFilter, format: Format, frozen: bool, db: &Path) -> Resu
         println!(
             "  {}",
             style.dim(&format!(
-                "… and {dropped_items} smaller recurring problem(s) — see `cclens failures --scope project`"
+                "… and {dropped_items} smaller recurring problem(s) — see `codexlens failures --scope project`"
             ))
         );
     }
@@ -938,7 +944,7 @@ fn doctor(filter: &ScopeFilter, format: Format, frozen: bool, db: &Path) -> Resu
                 style.bold(&fmt_tokens(f.floor))
             );
             println!(
-                "  {} comes from your own global config files; the other {} is Claude Code",
+                "  {} comes from your own global config files; the other {} is Codex",
                 fmt_tokens(f.config_tokens),
                 fmt_tokens(residual)
             );
@@ -954,7 +960,7 @@ fn doctor(filter: &ScopeFilter, format: Format, frozen: bool, db: &Path) -> Resu
             f.sub_agents
         );
         warn_missing_agent_split(&f.agent_split);
-        for line in doctor_agent_lines(&f, &style.command("cclens usage")) {
+        for line in doctor_agent_lines(&f, &style.command("codexlens usage")) {
             if line.starts_with('…') {
                 println!("  {}", style.dim(&line));
             } else {
@@ -967,9 +973,9 @@ fn doctor(filter: &ScopeFilter, format: Format, frozen: bool, db: &Path) -> Resu
     let mut pruning: Vec<String> = Vec::new();
     if filter.includes_global() && (!f.unused.is_empty() || !f.always_on_heavy.is_empty()) {
         pruning.push(format!(
-            "  ~/.claude: {} → {}",
+            "  ~/.codex: {} → {}",
             prune_phrase(&f.unused, &f.always_on_heavy),
-            style.command("cclens waste --scope global")
+            style.command("codexlens waste --scope global")
         ));
     }
     let mut prunable: Vec<_> = visible
@@ -982,7 +988,7 @@ fn doctor(filter: &ScopeFilter, format: Format, frozen: bool, db: &Path) -> Resu
             "  {}: {} → {}",
             display(p),
             prune_phrase(&p.unused, &p.always_on_heavy),
-            style.command(&format!("cclens waste --scope project:{}", p.project))
+            style.command(&format!("codexlens waste --scope project:{}", p.project))
         ));
     }
     if !pruning.is_empty() {
@@ -998,7 +1004,7 @@ fn doctor(filter: &ScopeFilter, format: Format, frozen: bool, db: &Path) -> Resu
             println!(
                 "  {}",
                 style.dim(&format!(
-                    "… and {} more project(s) with prunable config — see `cclens waste --scope project`",
+                    "… and {} more project(s) with prunable config — see `codexlens waste --scope project`",
                     prunable.len() - 3
                 ))
             );
@@ -1321,7 +1327,7 @@ fn failures(filter: &ScopeFilter, format: Format, frozen: bool, db: &Path) -> Re
         return emit_json(&serde_json::json!({ "total": total, "failures": failures }));
     }
     if total == 0 {
-        println!("no tool failures found for this scope — run `cclens analyze` first?");
+        println!("no tool failures found for this scope — run `codexlens analyze` first?");
         return Ok(());
     }
 
@@ -1334,15 +1340,15 @@ fn failures(filter: &ScopeFilter, format: Format, frozen: bool, db: &Path) -> Re
             }
             ScopeFilter::Global => {
                 "Failures spread across several projects — no single project owns them, so\n\
-                 they read as habits or global-config problems. Fix these in ~/.claude."
+                 they read as habits or global-config problems. Fix these in ~/.codex."
             }
             ScopeFilter::Project(None) => {
                 "Failures each project owns (it holds the majority of that kind). Fix each\n\
-                 in that project's own CLAUDE.md / .claude, not globally."
+                 in that project's own AGENTS.md / .codex, not globally."
             }
             ScopeFilter::Project(Some(_)) => {
                 "Every recurring failure inside this one project, most frequent first.\n\
-                 Fix them in this project's own CLAUDE.md / .claude."
+                 Fix them in this project's own AGENTS.md / .codex."
             }
         },
     );
@@ -1412,7 +1418,7 @@ fn prompts(format: Format, frozen: bool, db: &Path) -> Result<()> {
         return emit_json(&serde_json::json!({ "total": total, "behaviors": behaviors }));
     }
     if total == 0 {
-        println!("no prompts found — run `cclens analyze` first");
+        println!("no prompts found — run `codexlens analyze` first");
         return Ok(());
     }
 
@@ -1515,7 +1521,7 @@ fn overhead(format: Format, frozen: bool, db: &Path) -> Result<()> {
     let Some(floor) = floor else {
         let (sessions, _) = store.session_stats()?;
         if sessions == 0 {
-            println!("no data — run `cclens analyze` first");
+            println!("no data — run `codexlens analyze` first");
         } else {
             println!(
                 "always-on floor unavailable — none of the {sessions} analyzed session(s)\n\
@@ -1523,7 +1529,7 @@ fn overhead(format: Format, frozen: bool, db: &Path) -> Result<()> {
                  tracking keeps its old rows (analyze never re-reads a closed session), so\n\
                  the floor appears as newer sessions are analyzed. Discarding the store\n\
                  would backfill it from the transcripts still on disk, at the cost of every\n\
-                 session whose transcript Claude Code has already pruned."
+                 session whose transcript Codex has already pruned."
             );
         }
         return Ok(());
@@ -1541,7 +1547,7 @@ fn overhead(format: Format, frozen: bool, db: &Path) -> Result<()> {
         style.bold(&format!("{floor} tokens"))
     );
     println!(
-        "  readable config (CLAUDE.md, always-on rules, skill/agent descriptions): {config} tokens"
+        "  readable config (AGENTS.md, always-on rules, skill/agent descriptions): {config} tokens"
     );
     println!(
         "  residual (system prompt + built-in tools + MCP schemas):                {residual} tokens"
@@ -1654,14 +1660,18 @@ fn run_analyze(projects: Option<PathBuf>, db: &Path) -> Result<AnalyzeStats> {
         attribute_subagents(&mut spans, &runs);
         let sub_tokens: i64 = runs.iter().map(|run| run.out_tokens as i64).sum();
         let root = session_cwd(&text).map(|cwd| normalize_root(&cwd));
-        let meta = session_meta(
+        let mut meta = session_meta(
             &transcript,
             root.unwrap_or_default(),
             sub_tokens,
             runs.len() as i64,
             session_start(&records),
         );
+        if let Some(id) = crate::adapter::codex::session_id(&text) {
+            meta.id = id;
+        }
         store.ingest_session(&meta, &spans, &usage)?;
+        store.ingest_token_totals(&meta.id, &crate::adapter::codex::token_totals(&text))?;
         store.ingest_subagent_runs(&meta.id, &meta.source_path, &runs)?;
         let prompts: Vec<(usize, i64, &str)> = extract_prompt_pointers(&text)
             .into_iter()
@@ -1701,7 +1711,7 @@ fn run_analyze(projects: Option<PathBuf>, db: &Path) -> Result<AnalyzeStats> {
 
     // Catalog the installed config — global scope plus every known project root
     // that still exists on disk — so usage joins against what is installed.
-    let config_dir = claude_home()?;
+    let config_dir = codex_home()?;
     let mut surfaces = read_global_surfaces()?;
     for (root, project) in store.session_roots()? {
         if Path::new(&root).is_dir() {
@@ -1780,7 +1790,7 @@ fn warn_missing_agent_split(coverage: &SplitCoverage) {
             "{}",
             Style::stderr().warn(
                 "store: per-agent subagent split unavailable (store predates it) \
-                 — run `cclens analyze` (or drop --frozen) to fill it in"
+                 — run `codexlens analyze` (or drop --frozen) to fill it in"
             )
         );
     }
@@ -1790,7 +1800,7 @@ fn warn_missing_agent_split(coverage: &SplitCoverage) {
 /// when it carries a staleness hint the user should act on.
 fn eprint_freshness(line: &str) {
     let style = Style::stderr();
-    if line.contains("cclens analyze") {
+    if line.contains("codexlens analyze") {
         eprintln!("{}", style.warn(line));
     } else {
         eprintln!("{}", style.dim(line));
@@ -1802,11 +1812,12 @@ fn eprint_freshness(line: &str) {
 fn freshness_line(analyzed_at: Option<&str>) -> String {
     let Some(parsed) = analyzed_at.and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
     else {
-        return "store: freshness unknown (no analyze recorded) — run `cclens analyze`".to_string();
+        return "store: freshness unknown (no analyze recorded) — run `codexlens analyze`"
+            .to_string();
     };
     let age_secs = (chrono::Utc::now() - parsed.with_timezone(&chrono::Utc)).num_seconds();
     let hint = if age_secs >= 24 * 3600 {
-        " — run `cclens analyze` (or drop --frozen) to refresh"
+        " — run `codexlens analyze` (or drop --frozen) to refresh"
     } else {
         ""
     };
@@ -1877,50 +1888,9 @@ fn normalize_root(cwd: &str) -> String {
 /// main-thread spawn its tree started at. A run whose sidecar is missing keeps
 /// an unknown agent type and only the turn-level join key — it still counts,
 /// with the gap visible, rather than being guessed at or dropped.
-fn subagent_runs(transcript: &Path) -> Vec<SubagentRun> {
-    let Ok(entries) = fs::read_dir(subagents_dir(transcript)) else {
-        return Vec::new();
-    };
-    let mut runs = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().is_none_or(|ext| ext != "jsonl") {
-            continue;
-        }
-        let Ok(text) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let sidecar = fs::read_to_string(subagent_sidecar_path(&path))
-            .ok()
-            .and_then(|json| parse_subagent_sidecar(&json))
-            .unwrap_or_default();
-        let records = parse_session(&text);
-        runs.push(SubagentRun {
-            agent: sidecar.agent_type,
-            agent_id: path
-                .file_stem()
-                .map(|stem| subagent_id_from_file_name(&stem.to_string_lossy()))
-                .unwrap_or_default(),
-            run_path: path.display().to_string(),
-            tool_use_id: sidecar.tool_use_id,
-            parent_agent_id: sidecar.parent_agent_id,
-            spawn_depth: sidecar.spawn_depth.unwrap_or(1),
-            model: sidecar.model,
-            prompt_id: subagent_prompt_id(&text),
-            out_tokens: output_tokens(&records),
-            started_epoch_ms: records.first().map(|r| r.timestamp_ms).unwrap_or_default(),
-            root_tool_use_id: None,
-        });
-    }
-    // Directory order is filesystem-dependent; spawn order is not. Sorting keeps
-    // one session's ingest byte-identical across machines and re-runs.
-    runs.sort_by(|a, b| {
-        a.started_epoch_ms
-            .cmp(&b.started_epoch_ms)
-            .then_with(|| a.agent_id.cmp(&b.agent_id))
-    });
-    link_runs(&mut runs);
-    runs
+fn subagent_runs(_transcript: &Path) -> Vec<SubagentRun> {
+    // Codex child rollouts are ingested independently. Do not invent attribution.
+    Vec::new()
 }
 
 fn usage(by: Option<&str>, format: Format, frozen: bool, db: &Path) -> Result<()> {
@@ -1932,6 +1902,7 @@ fn usage(by: Option<&str>, format: Format, frozen: bool, db: &Path) -> Result<()
         return usage_by_time(&store, bucket, format);
     }
 
+    let totals = store.token_totals()?;
     let skills = store.skill_usage()?;
     // Where the tokens actually go: main-thread skill output vs subagents. The
     // subagent figure is usually the larger by far — worth seeing before reading
@@ -1955,10 +1926,15 @@ fn usage(by: Option<&str>, format: Format, frozen: bool, db: &Path) -> Result<()
     if format == Format::Json {
         return emit_json(&serde_json::json!({
             "tokens": {
+                "input": totals.input,
+                "cached_input": totals.cached_input,
+                "output": totals.output,
+                "reasoning_output": totals.reasoning_output,
                 "main_out": main_out,
                 "sub_tokens": sub_tokens,
                 "sub_agents": sub_agents,
             },
+            "coverage": {"skill_usage": "observed-loads", "subagent_cost_attribution": false},
             "agent_split": agent_split,
             "agents": agents,
             "skills": skills,
@@ -1967,8 +1943,13 @@ fn usage(by: Option<&str>, format: Format, frozen: bool, db: &Path) -> Result<()
     // A subagent total with neither table behind it is not "nothing happened" —
     // it is a store whose per-agent split has not been extracted yet, and saying
     // "no usage" there would be false.
+    println!(
+        "tokens: input {}, cached input {}, output {}, reasoning output {} (included in output)",
+        totals.input, totals.cached_input, totals.output, totals.reasoning_output
+    );
+    println!("coverage: skill reads are load signals; subagent cost attribution is unavailable");
     if skills.is_empty() && agents.is_empty() && sub_tokens == 0 {
-        println!("no skill usage found — run `cclens analyze` first");
+        println!("no observable skill loads found");
         return Ok(());
     }
     preamble(
@@ -2073,7 +2054,7 @@ fn usage_by_time(store: &Store, bucket: Bucket, format: Format) -> Result<()> {
         return emit_json(&serde_json::json!({ "buckets": buckets }));
     }
     if events.is_empty() {
-        println!("no skill usage found — run `cclens analyze` first");
+        println!("no observable skill loads found");
         return Ok(());
     }
 
@@ -2111,21 +2092,7 @@ fn usage_by_time(store: &Store, bucket: Bucket, format: Format) -> Result<()> {
 
 /// Read all installed config (global scope) into one surface list.
 fn read_global_surfaces() -> Result<Vec<Surface>> {
-    let config_dir = claude_home()?;
-    let scope = Scope::Global;
-    let mut surfaces = read_skill_surfaces(&config_dir.join("skills"), &scope);
-    surfaces.extend(read_rule_surfaces(&config_dir.join("rules"), &scope));
-    surfaces.extend(read_agent_surfaces(&config_dir.join("agents"), &scope));
-    surfaces.extend(read_mcp_server_surfaces(
-        &config_dir.join("mcp.json"),
-        &scope,
-    ));
-    surfaces.extend(read_claude_md_surfaces(
-        &[(&config_dir.join("CLAUDE.md"), "global")],
-        &scope,
-        home_dir().map(Path::new),
-    ));
-    Ok(surfaces)
+    Ok(read_global(&codex_home()?, home_dir().map(Path::new)))
 }
 
 /// Join the catalogued surfaces against usage: each installed surface with its
@@ -2178,24 +2145,24 @@ fn inventory(filter: &ScopeFilter, format: Format, frozen: bool, db: &Path) -> R
         return emit_json(&serde_json::json!({ "surfaces": items }));
     }
     if catalog.is_empty() && usage.is_empty() {
-        println!("nothing catalogued — run `cclens analyze` first");
+        println!("nothing catalogued — run `codexlens analyze` first");
         return Ok(());
     }
 
     preamble(
         format,
         "Everything installed in your config — skills, rules, agents, MCP servers,\n\
-         CLAUDE.md — with where it is installed (scope) and whether it was ever used.\n\
+         AGENTS.md — with where it is installed (scope) and whether it was ever used.\n\
          \"start tok\" is what every session pays for having it installed; \"static tok\"\n\
          is the whole definition, which for a skill or agent is paid only on invocation.\n\
-         UNUSED marks delete candidates; rules and CLAUDE.md are catalog-only because\n\
+         UNUSED marks delete candidates; rules and AGENTS.md are catalog-only because\n\
          using them leaves no trace in transcripts.",
     );
     let mut rows: Vec<Vec<String>> = Vec::new();
     for entry in &catalog {
         let measurable = is_usage_measurable(&entry.kind);
         // "unused" is only meaningful for usage-measurable kinds; catalog-only
-        // kinds (rules, hooks, CLAUDE.md) emit no events, so 0 means nothing.
+        // kinds (rules, hooks, AGENTS.md) emit no events, so 0 means nothing.
         let (uses_cell, status) = if measurable {
             (
                 entry.uses.to_string(),
@@ -2369,7 +2336,7 @@ fn waste(filter: &ScopeFilter, format: Format, frozen: bool, db: &Path) -> Resul
         return emit_json(&serde_json::json!({ "wedges": wedges }));
     }
     if found.is_empty() {
-        println!("nothing wasteful found — run `cclens analyze` first");
+        println!("nothing wasteful found — run `codexlens analyze` first");
         return Ok(());
     }
 
@@ -2463,21 +2430,7 @@ fn savings_suggestion(wedge: Wedge, savings: StartupSavings, on_demand: Option<u
 /// project slug directory (subagent transcripts live one level deeper and are
 /// not main-thread usage).
 fn main_transcripts(projects: &Path) -> Result<Vec<PathBuf>> {
-    let mut transcripts = Vec::new();
-    let slugs = fs::read_dir(projects)
-        .with_context(|| format!("read projects dir {}", projects.display()))?;
-    for slug in slugs.flatten() {
-        if !slug.path().is_dir() {
-            continue;
-        }
-        for entry in fs::read_dir(slug.path()).into_iter().flatten().flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "jsonl") {
-                transcripts.push(path);
-            }
-        }
-    }
-    Ok(transcripts)
+    discover_transcripts(projects)
 }
 
 fn session_meta(
@@ -2492,12 +2445,11 @@ fn session_meta(
         .and_then(|stem| stem.to_str())
         .unwrap_or("unknown")
         .to_string();
-    let slug = transcript
-        .parent()
-        .and_then(|dir| dir.file_name())
-        .and_then(|name| name.to_str())
-        .unwrap_or("unknown")
-        .to_string();
+    let slug = if root.is_empty() {
+        "unknown".to_string()
+    } else {
+        root.clone()
+    };
     SessionMeta {
         project: normalize_project(&slug),
         slug,
@@ -2520,7 +2472,7 @@ fn normalize_project(slug: &str) -> String {
 }
 
 fn default_projects_dir() -> Result<PathBuf> {
-    Ok(claude_home()?.join("projects"))
+    codex_home()
 }
 
 /// The user's home directory, resolved once per run.
@@ -2545,27 +2497,27 @@ fn home_dir() -> Option<&'static str> {
     .as_deref()
 }
 
-/// The Claude Code config root for this run: the environment read that
-/// `adapter::config::claude_config_dir` deliberately does not do, plus the
+/// The Codex config root for this run: the environment read that
+/// `adapter::codex_config::codex_config_dir` deliberately does not do, plus the
 /// advice to show when neither variable names one.
-fn claude_home() -> Result<PathBuf> {
-    let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from);
+fn codex_home() -> Result<PathBuf> {
+    let config_dir = std::env::var_os("CODEX_HOME").map(PathBuf::from);
     // What can go wrong differs by platform, so the advice does too: only
     // Windows requires the value to name a real directory, and telling a unix
     // user otherwise sends them looking for a problem they do not have.
-    claude_config_dir(config_dir.as_deref(), home_dir().map(Path::new)).with_context(|| {
+    codex_config_dir(config_dir.as_deref(), home_dir().map(Path::new)).with_context(|| {
         if cfg!(windows) {
-            "set CLAUDE_CONFIG_DIR, or HOME/USERPROFILE to an existing directory"
+            "set CODEX_HOME, or HOME/USERPROFILE to an existing directory"
         } else {
-            "set CLAUDE_CONFIG_DIR or HOME"
+            "set CODEX_HOME or HOME"
         }
     })
 }
 
 /// Resolve `--db`, defaulting to a **user-level** store rather than a
 /// cwd-relative file. What gets analyzed is every transcript under
-/// `~/.claude/projects` — one cross-project dataset — so a per-directory
-/// default would build a separate copy of the same store per directory cclens
+/// `~/.codex` — one cross-project dataset — so a per-directory
+/// default would build a separate copy of the same store per directory codexlens
 /// happens to run from, and leave a database inside unrelated Git working
 /// trees.
 ///
@@ -2597,7 +2549,7 @@ fn store_path(
             .join(".local")
             .join("state"),
     };
-    Ok(base.join("cclens").join("cclens.db"))
+    Ok(base.join("codexlens").join("codexlens.db"))
 }
 
 /// `store_path` against the live environment.
@@ -2761,12 +2713,12 @@ mod tests {
     fn version_flag_prints_the_crate_version() {
         use clap::CommandFactory;
         let err = Cli::command()
-            .try_get_matches_from(["cclens", "--version"])
+            .try_get_matches_from(["codexlens", "--version"])
             .unwrap_err();
         assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
         assert_eq!(
             err.to_string(),
-            format!("cclens {}\n", env!("CARGO_PKG_VERSION"))
+            format!("codexlens {}\n", env!("CARGO_PKG_VERSION"))
         );
     }
 
@@ -2803,12 +2755,12 @@ mod tests {
             10,
             vec![agent("a", 4, 700_000), agent("b", 6, 300_000)],
         );
-        let lines = doctor_agent_lines(&f, "cclens usage");
+        let lines = doctor_agent_lines(&f, "codexlens usage");
         assert_eq!(
             lines,
             vec![
                 "Most of that subagent output: a 700.0k (4 runs), b 300.0k (6 runs). \
-                 Full split: cclens usage"
+                 Full split: codexlens usage"
             ]
         );
     }
@@ -2821,12 +2773,12 @@ mod tests {
             .map(|i| agent(&format!("t{i}"), 1, 100_000))
             .collect();
         let f = findings_with_agents(1_000_000, 10, agents);
-        let lines = doctor_agent_lines(&f, "cclens usage");
+        let lines = doctor_agent_lines(&f, "codexlens usage");
         assert_eq!(
             lines,
             vec![
                 "The largest agent types: t0 100.0k (1 run), t1 100.0k (1 run), t2 100.0k \
-                 (1 run). Full split: cclens usage",
+                 (1 run). Full split: codexlens usage",
                 "… and 7 more agent type(s) not shown",
             ]
         );
@@ -2844,14 +2796,14 @@ mod tests {
                 agent("codex:codex-rescue", 14, 62_067),
             ],
         );
-        let lines = doctor_agent_lines(&f, "cclens usage");
+        let lines = doctor_agent_lines(&f, "codexlens usage");
         assert_eq!(
             lines,
             vec![
                 "Only 377.7k of those tokens (25 of 375 runs) have a per-agent split — the \
                  rest were analyzed before runs were extracted and their transcripts are gone.",
                 "Among the runs that have one: general-purpose 315.7k (11 runs), \
-                 codex:codex-rescue 62.1k (14 runs). Full split: cclens usage",
+                 codex:codex-rescue 62.1k (14 runs). Full split: codexlens usage",
             ]
         );
     }
@@ -2861,7 +2813,7 @@ mod tests {
         // The gap is reported on stderr with its refresh hint; there is
         // nothing to list in-band.
         let f = findings_with_agents(3_093_466, 375, vec![]);
-        assert!(doctor_agent_lines(&f, "cclens usage").is_empty());
+        assert!(doctor_agent_lines(&f, "codexlens usage").is_empty());
     }
 
     /// A path in the temp dir that no other test uses, removed on drop so a
@@ -2871,7 +2823,7 @@ mod tests {
     impl TempPath {
         fn new(tag: &str) -> Self {
             let mut path = std::env::temp_dir();
-            path.push(format!("cclens-test-{}-{tag}", std::process::id()));
+            path.push(format!("codexlens-test-{}-{tag}", std::process::id()));
             let _ = fs::remove_file(&path);
             Self(path)
         }
@@ -2915,8 +2867,8 @@ mod tests {
     #[test]
     fn shorten_to_tilde_replaces_the_home_prefix() {
         assert_eq!(
-            shorten_to_tilde("/tmp/example/me/.claude", Some("/tmp/example/me")),
-            "~/.claude"
+            shorten_to_tilde("/tmp/example/me/.codex", Some("/tmp/example/me")),
+            "~/.codex"
         );
         // Home itself collapses to a bare tilde.
         assert_eq!(
@@ -2928,8 +2880,8 @@ mod tests {
     #[test]
     fn shorten_to_tilde_accepts_a_backslash_separator() {
         assert_eq!(
-            shorten_to_tilde(r"C:\example\me\.claude", Some(r"C:\example\me")),
-            r"~\.claude"
+            shorten_to_tilde(r"C:\example\me\.codex", Some(r"C:\example\me")),
+            r"~\.codex"
         );
     }
 
@@ -2939,12 +2891,12 @@ mod tests {
         // environment while the path comes from a recorded cwd — so the two can
         // disagree on spelling while naming the same directory.
         assert_eq!(
-            shorten_to_tilde("C:/example/me/.claude", Some(r"C:\example\me")),
-            "~/.claude"
+            shorten_to_tilde("C:/example/me/.codex", Some(r"C:\example\me")),
+            "~/.codex"
         );
         assert_eq!(
-            shorten_to_tilde(r"C:\example\me\.claude", Some("C:/example/me")),
-            r"~\.claude"
+            shorten_to_tilde(r"C:\example\me\.codex", Some("C:/example/me")),
+            r"~\.codex"
         );
         // The suffix keeps the spelling the path actually had, not the folded
         // one used for the comparison.
@@ -3048,11 +3000,11 @@ mod tests {
     fn store_path_defaults_under_the_user_state_dir() {
         assert_eq!(
             store_path(None, Some(Path::new("/tmp/example/state")), None).unwrap(),
-            PathBuf::from("/tmp/example/state/cclens/cclens.db")
+            PathBuf::from("/tmp/example/state/codexlens/codexlens.db")
         );
         assert_eq!(
             store_path(None, None, Some(Path::new("/tmp/example/home"))).unwrap(),
-            PathBuf::from("/tmp/example/home/.local/state/cclens/cclens.db")
+            PathBuf::from("/tmp/example/home/.local/state/codexlens/codexlens.db")
         );
     }
 
@@ -3067,7 +3019,7 @@ mod tests {
                 Some(Path::new("/tmp/example/home"))
             )
             .unwrap(),
-            PathBuf::from("/tmp/example/home/.local/state/cclens/cclens.db")
+            PathBuf::from("/tmp/example/home/.local/state/codexlens/codexlens.db")
         );
     }
 
@@ -3088,12 +3040,12 @@ mod tests {
         // The escape hatch for a deliberately project-local store.
         assert_eq!(
             store_path(
-                Some(PathBuf::from("./cclens.db")),
+                Some(PathBuf::from("./codexlens.db")),
                 Some(Path::new("/tmp/example/state")),
                 Some(Path::new("/tmp/example/home"))
             )
             .unwrap(),
-            PathBuf::from("./cclens.db")
+            PathBuf::from("./codexlens.db")
         );
     }
 }

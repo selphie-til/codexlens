@@ -1,15 +1,5 @@
 {
-  description = "cclens — a lens onto your Claude Code usage";
-
-  # Advertise the shared Cachix cache so `nix run github:lambdalisue/cclens`
-  # pulls prebuilt artifacts instead of compiling from source. Trusted users
-  # get it automatically; others are prompted to accept it on first use.
-  nixConfig = {
-    extra-substituters = [ "https://cclens.cachix.org" ];
-    extra-trusted-public-keys = [
-      "cclens.cachix.org-1:0QUNU6PuVyf+yXOvg3n1rd3FksBoB3s3/Jty50iKRNQ="
-    ];
-  };
+  description = "codexlens — a lens onto your Codex usage";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -48,14 +38,14 @@
         # github:lambdalisue/nix-github-release. Only the package is stamped
         # with it, so the dependency layer above stays cached across releases.
         version = nix-github-release.lib.version { inherit self; };
-        cclens = craneLib.buildPackage (nix-github-release.lib.stampCargo { inherit pkgs version; }
+        codexlens = craneLib.buildPackage (nix-github-release.lib.stampCargo { inherit pkgs version; }
           (commonArgs // { inherit cargoArtifacts; }));
       in
       {
-        # `nix build` / `nix run github:lambdalisue/cclens -- summary`; pin a
-        # release with `github:lambdalisue/cclens/vX.Y.Z`.
-        packages.default = cclens;
-        apps.default = flake-utils.lib.mkApp { drv = cclens; };
+        # `nix build` / `nix run github:selphie-til/codexlens -- summary`; pin a
+        # release with `github:selphie-til/codexlens/vX.Y.Z`.
+        packages.default = codexlens;
+        apps.default = flake-utils.lib.mkApp { drv = codexlens; };
 
         # `nix develop` — the pinned tools, same ones CI uses via `just`.
         devShells.default = pkgs.mkShell {
@@ -69,7 +59,7 @@
           ];
           env.RUST_BACKTRACE = "1";
           shellHook = ''
-            echo "cclens dev shell — $(rustc --version)"
+            echo "codexlens dev shell — $(rustc --version)"
           '';
         };
 

@@ -45,13 +45,13 @@ them directly unit-testable:
   span that ends at the next human turn, one that ends at the next sibling skill
   call, a `compact_boundary` mid-span, a subagent linked by `promptId`, a
   configured-but-unused surface, a UTC→JST boundary case). Fixtures are synthetic
-  by mandate; see `.claude/rules/session-data-privacy.md`.
+  by mandate; see `.codex/rules/session-data-privacy.md`.
 - One assertion focus per test. The test name states the *what*; the body shows
   the example.
 
 ## Anti-patterns
 
 - No production code ahead of a failing test "because we'll need it."
-- No tests that assert on a real `~/.claude/projects` file — they are
+- No tests that assert on a real `~/.codex/projects` file — they are
   non-deterministic and leak private data.
 - Don't weaken an assertion to make a flaky test pass; fix the determinism.

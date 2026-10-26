@@ -1,7 +1,7 @@
 //! Per-span derived values computed over the records of a span — cost metrics
 //! and the representative model. See `docs/specs/events.md`.
 
-/// The model sentinel Claude Code writes for locally-generated assistant turns,
+/// The model sentinel Codex writes for locally-generated assistant turns,
 /// excluded when choosing a span's representative model.
 const SYNTHETIC_MODEL: &str = "<synthetic>";
 
@@ -23,7 +23,7 @@ pub fn ctx_growth(prompt_sizes: &[u64]) -> u64 {
 /// Wall-clock duration of a span, in seconds.
 ///
 /// `timestamps_ms` is the record timestamps in the span (epoch milliseconds, in
-/// record order — the adapter normalizes Claude Code's UTC ISO-8601 to this).
+/// record order — the adapter normalizes Codex's UTC ISO-8601 to this).
 /// The duration is the last timestamp minus the first; a span with fewer than
 /// two timestamped records has no measurable duration and is zero. See
 /// `docs/specs/events.md`.
@@ -42,6 +42,14 @@ pub fn representative_model<'a>(models: &[&'a str]) -> Option<&'a str> {
         .iter()
         .copied()
         .find(|&model| model != SYNTHETIC_MODEL)
+}
+
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct TokenTotals {
+    pub input: u64,
+    pub cached_input: u64,
+    pub output: u64,
+    pub reasoning_output: u64,
 }
 
 #[cfg(test)]

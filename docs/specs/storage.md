@@ -21,7 +21,7 @@ CREATE TABLE sessions (
     started_at      TEXT NOT NULL,      -- RFC3339 UTC
     sub_tokens      INTEGER NOT NULL,   -- the session's exact subagent output total (events.md)
     sub_agent_count INTEGER NOT NULL,   -- subagent runs the session spawned, nested included
-    version         TEXT                -- Claude Code version, when present
+    version         TEXT                -- Codex version, when present
 );
 
 -- Catalog: everything installed, with its static cost. Read from live config.
@@ -163,7 +163,7 @@ SQLite creates it, which is what keeps the guarantee airtight: the schema write
 would otherwise land in a file still carrying the umask mode, and SQLite copies
 the database's mode onto the rollback journal it writes beside it, so the
 journal inherits `0600` for free. An **existing** store is narrowed as well —
-a store an older cclens created under the umask is the case that actually
+a store an older codexlens created under the umask is the case that actually
 exists, and a permanently exposed one would mean this protection never reaches
 anyone who already ran the tool. Only a regular file is re-moded, so a `--db`
 pointing at a directory still fails at SQLite rather than being silently
@@ -175,10 +175,10 @@ legitimately created under another user.
 
 `surfaces` is keyed `(kind, id, scope, project)` because the same logical
 surface can be installed globally and in **any number of projects** (e.g. a
-`git-commit` skill in `~/.claude/skills/` and in two projects'
-`.claude/skills/`). Events carry only `(surface_kind, surface_id)` — the
+`git-commit` skill in `~/.codex/skills/` and in two projects'
+`.codex/skills/`). Events carry only `(surface_kind, surface_id)` — the
 transcript does not reveal which copy was loaded — but they *do* join a session
-whose `project` is known, and Claude Code's own resolution makes a project's
+whose `project` is known, and Codex's own resolution makes a project's
 copy shadow the global one **inside that project only**.
 
 So the catalog×usage join is defined per session project: an event from project
@@ -219,7 +219,7 @@ checkout.
 
 ## Schema evolution is non-destructive
 
-The store outlives its inputs. Claude Code prunes transcripts on its own
+The store outlives its inputs. Codex prunes transcripts on its own
 retention schedule, and once a transcript is gone the rows extracted from it are
 the only surviving record of that session — nothing on disk can rebuild them.
 So an upgrade may never resolve schema drift by asking for the file to be
@@ -313,9 +313,9 @@ Transcripts are append-only and **active sessions keep growing**, so re-running
   is a snapshot of *now*, not an accumulation. (Usage is historical; catalog is
   current — `surfaces.md`.)
 
-The fingerprint is keyed on the *file*, not on what cclens knew how to extract
+The fingerprint is keyed on the *file*, not on what codexlens knew how to extract
 from it. On its own that skip never expires: a session that has closed will never
-change again, so its rows would stay pinned to whatever the cclens that first read
+change again, so its rows would stay pinned to whatever the codexlens that first read
 them understood — an event kind added later stays missing for that session, a
 field added later stays NULL, and a classifier that learned a new pattern never
 reaches it.
@@ -374,3 +374,11 @@ and its cost was measured there. Putting it in `events` with `surface_kind =
 'agent'` would double-count every spawn in the catalog×usage join, which counts
 rows per surface. The spine keeps the main thread's spawn; the run keeps the
 cost; `events.target` joins them.
+
+## Codex session counters
+
+`token_totals` stores one replaceable row per session id: input, cached_input,
+output and reasoning_output. Re-analysis replaces counters, so repeated reads
+do not inflate totals. The analyzer version is `codex-1`. Session identities use session_meta ids (with filename fallback). Events are
+replaced by session id as well as source path so archiving cannot duplicate them.
+Session projects use the recorded cwd rather than the rollout date directory.

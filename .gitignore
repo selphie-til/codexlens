@@ -11,10 +11,10 @@
 *.sqlite
 *.sqlite3
 
-# Harvested Claude Code session data MUST NOT be committed.
+# Harvested Codex session data MUST NOT be committed.
 # Test fixtures live under tests/ and are synthetic — see
 # .claude/rules/session-data-privacy.md. Anything captured from a real
-# ~/.claude/projects transcript belongs only in a local scratch dir.
+# ~/.codex/sessions transcript belongs only in a local scratch dir.
 /scratch
 /.scratch
 *.jsonl

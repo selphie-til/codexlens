@@ -1,10 +1,10 @@
-# cclens
+# codexlens
 
-A CLI that analyzes Claude Code usage to show **where your Claude Code
+A CLI that analyzes Codex usage to show **where your Codex
 configuration can be optimized, and how**. It measures the **cost** (context
 tokens, wall-clock time, friction) and **actual usage** of every configuration
 surface — skills, rules, hooks, MCP servers and their tool schemas, agents,
-`CLAUDE.md` / `AGENTS.md` / memory, permissions — and surfaces the optimization
+`AGENTS.md` / `AGENTS.md` / memory, permissions — and surfaces the optimization
 wedges: high cost with low use (prune), always-on cost used only rarely
 (defer/split), redundancy (merge), recurring friction (configure).
 
@@ -36,7 +36,7 @@ Two stages, decoupled by an intermediate SQLite store:
 transcripts + config ──analyze──▶ SQLite (sessions · surfaces · events) ──▶ consumers
 ```
 
-`analyze` reads two kinds of Claude Code input — **session transcripts** (what
+`analyze` reads two kinds of Codex input — **session transcripts** (what
 was actually used and at what cost) and **live config** (what is installed and
 its static cost) — and writes a normalized store. The first consumer is CLI
 reporting (tables / Markdown); a later consumer feeds the same store to AI for
@@ -50,10 +50,14 @@ measured cost). What is configured but absent from events is unused; what is
 costly but rarely used is a prune candidate.
 
 Internally the code is layered — an **adapter** that owns all knowledge of the
-Claude Code input formats (transcript JSONL *and* config files), a **pure core**
+Codex input formats (transcript JSONL *and* config files), a **pure core**
 (records → events → aggregates, and the surface/usage joins), a **store**, and
 **reporting**. Those input formats are upstream and will change; isolating them
-in the adapter keeps the rest stable across Claude Code releases. See
+in the adapter keeps the rest stable across Codex releases. See
 `docs/specs/architecture.md` and `.claude/rules/format-isolation.md`.
 
 Project-local guardrails live in `.claude/rules/`.
+
+Codex input formats live in `src/adapter/codex.rs` and `codex_config.rs`.
+`transcript.rs` and `config.rs` retain upstream parsing helpers and regression
+tests; the CLI does not ingest Claude transcripts. Never commit live rollouts.

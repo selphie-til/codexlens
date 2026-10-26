@@ -1,28 +1,24 @@
 [package]
-name = "cclens"
-# Placeholder. The release workflow rewrites this from the tag of the published
-# GitHub Release before it runs `cargo publish`, so the committed value is never
-# what ships. It stays at 0.0.0 rather than a plausible number precisely so
-# nobody reads it as the current version — the tags are the record.
+name = "codexlens"
+# Development placeholder; release builds stamp the version from the tag.
 version = "0.0.0"
 edition = "2024"
-description = "A lens onto your Claude Code usage: where time, tokens, and effort go, and which config to fix"
-repository = "https://github.com/lambdalisue/cclens"
+description = "A lens onto your Codex usage: where time, tokens, and effort go, and which config to fix"
+repository = "https://github.com/selphie-til/codexlens"
 license = "MIT"
 readme = "README.md"
-keywords = ["claude", "claude-code", "usage", "analytics", "cli"]
+keywords = ["codex", "codex-cli", "usage", "analytics", "cli"]
 categories = ["command-line-utilities", "development-tools"]
 # The crate is the Rust program. Everything that only serves someone working in
 # the repository — the dev shell, the task runner, the toolchain pin, the CI
-# definitions, the contributor guide, the project's own Claude Code rules and the
+# definitions, the contributor guide, the project's own Codex rules and the
 # plugin marketplace — is furniture a downloaded package cannot act on, so it
 # stays out of the tarball. `docs/specs/` is the exception: the README links into
 # it, and it is what explains the code.
 exclude = [
   ".claude/",
-  ".claude-plugin/",
   ".github/",
-  "plugins/",
+  "skills/",
   "AGENTS.md",
   "flake.lock",
   "flake.nix",
@@ -40,3 +36,5 @@ clap = { version = "4.6.1", features = ["derive"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+
+toml = "0.8"

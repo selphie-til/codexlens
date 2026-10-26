@@ -3,7 +3,7 @@
 //! (`docs/specs/surfaces.md`). The adapter fills these from live config; the
 //! join against events lives in the store.
 
-/// Where a surface is installed: the shared `~/.claude`, or one specific
+/// Where a surface is installed: the shared `~/.codex`, or one specific
 /// project's config. The project scope names its project (the normalized slug)
 /// because many projects coexist in one catalog and shadowing is per-project
 /// (`docs/specs/surfaces.md`).
@@ -34,7 +34,7 @@ impl Scope {
 /// separates always-on tax from per-use cost (`docs/specs/config-format.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadMode {
-    /// Paid every session, unconditionally (CLAUDE.md, memory).
+    /// Paid every session, unconditionally (AGENTS.md, memory).
     StartupFull,
     /// Only the description is loaded at startup; the body is on-demand (skills, agents).
     StartupDescription,
@@ -102,7 +102,7 @@ pub struct Surface {
 
 /// Whether a surface kind can ever acquire usage events. Absence of events is
 /// only evidence of disuse for usage-measurable kinds; for catalog-only kinds
-/// (rules, hooks, CLAUDE.md) it means nothing (`docs/specs/surfaces.md`).
+/// (rules, hooks, AGENTS.md) it means nothing (`docs/specs/surfaces.md`).
 pub fn is_usage_measurable(kind: &str) -> bool {
     matches!(
         kind,
@@ -192,7 +192,7 @@ pub fn startup_savings(load_mode: LoadMode, startup_tokens: Option<u64>) -> Star
 /// Classify a surface into its optimization wedge, if any. `uses` is the
 /// invocation count (meaningful only for `measurable` kinds); `heavy_tokens`
 /// is the injected threshold for "large" static cost. The "unused" verdict is
-/// gated on measurability so a rule or CLAUDE.md is never called unused for
+/// gated on measurability so a rule or AGENTS.md is never called unused for
 /// emitting no events (`docs/specs/surfaces.md`).
 pub fn classify_wedge(
     measurable: bool,
